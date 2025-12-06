@@ -99,6 +99,13 @@ def snapshot_detail(snapshot_id):
           }
           const data = await response.json();
           container.innerHTML = buildTreeHtml(data.tree, '');
+
+          if (data.truncated) {
+            const warning = document.createElement('p');
+            warning.style.color = 'red';
+            warning.textContent = 'Warning: tree truncated due to size limits; some entries may be missing.';
+            container.prepend(warning);
+          }
         } catch (e) {
           container.textContent = 'Error loading snapshot contents.';
         }
@@ -162,34 +169,35 @@ def snapshot_detail(snapshot_id):
 @app.route("/api/snapshot/<snapshot_id>/tree")
 def snapshot_tree_api(snapshot_id):
     """
-    Lightweight API endpoint that returns a pruned directory tree for the snapshot.
-    This avoids rendering the whole tree in the main request and lets the browser
-    handle the JSON asynchronously.
+    API endpoint that returns a directory tree for the snapshot.
+    We still cap the number of entries processed to avoid pathological
+    repositories, but we no longer truncate by depth or insert artificial
+    path segments.
     """
     restic = ResticUI()
     contents = restic.get_snapshot_contents(snapshot_id)
 
     tree = {}
-    max_depth = 10  # keep depth reasonable to avoid huge trees
-    max_entries = 5000  # hard cap on number of paths processed
+    # Raise this significantly so typical repos are fully represented.
+    # If you want absolutely no cap, set max_entries = None and adjust the loop.
+    max_entries = 200000  # hard cap on number of paths processed
 
     count = 0
     for line in contents:
-        if count >= max_entries:
+        if max_entries is not None and count >= max_entries:
             break
         parts = line.strip().split()
         path = parts[-1] if parts else ""
         if not path:
             continue
         segments = path.split('/')
-        if len(segments) > max_depth:
-            segments = segments[:max_depth] + ['…']
         current = tree
         for segment in segments:
             current = current.setdefault(segment, {})
         count += 1
 
-    return jsonify({"tree": tree, "truncated": count >= max_entries})
+    truncated = max_entries is not None and count >= max_entries
+    return jsonify({"tree": tree, "truncated": truncated})
 
 if __name__ == "__main__":
     app.run(host="100.69.69.69")
