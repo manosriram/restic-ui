@@ -195,6 +195,8 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
 
     - For a small number of paths, use multiple --include flags.
     - For many paths, write them to a temporary file and use --files-from.
+
+    Returns a tuple: (combined_logs, success_bool)
     """
     # Basic sanity checks; you can tighten these as needed
     restore_path = restore_path.strip()
@@ -207,49 +209,64 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
     if len(selected_paths) == 0:
         raise ValueError("No paths selected for restore")
 
+    def _run_and_collect_logs(cmd, context):
+        app.logger.info("Running restore command%s: %s", context, " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        logs = ""
+        if result.stdout:
+            logs += result.stdout
+        if result.stderr:
+            if logs:
+                logs += "\n"
+            logs += result.stderr
+        if result.returncode != 0:
+            app.logger.error("restic restore failed%s: %s", context, result.stderr)
+            return logs, False
+        return logs, True
+
+    logs = ""
+    success = False
+
     if len(selected_paths) <= FILES_FROM_THRESHOLD:
         # Use multiple --include flags
         cmd = ["/usr/bin/restic", "restore", snapshot_id, "--target", restore_path]
         for path in selected_paths:
             # Paths come from our own UI, but still strip whitespace
             cmd.extend(["--include", path.strip()])
-        app.logger.info("Running restore command: %s", " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            app.logger.error("restic restore failed (includes): %s", result.stderr)
-            raise RuntimeError(f"restic restore failed: {result.stderr}")
-        return
+        logs, success = _run_and_collect_logs(cmd, " (includes)")
+    else:
+        # Many paths: use --files-from
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+                tmp_path = f.name
+                for p in selected_paths:
+                    f.write(p.strip() + "\n")
 
-    # Many paths: use --files-from
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
-            tmp_path = f.name
-            for p in selected_paths:
-                f.write(p.strip() + "\n")
+            cmd = [
+                "/usr/bin/restic",
+                "restore",
+                snapshot_id,
+                "--target",
+                restore_path,
+                "--files-from",
+                tmp_path,
+            ]
+            logs, success = _run_and_collect_logs(cmd, " (files-from)")
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    app.logger.warning(
+                        "Failed to remove temporary files-from list: %s", tmp_path
+                    )
 
-        cmd = [
-            "/usr/bin/restic",
-            "restore",
-            snapshot_id,
-            "--target",
-            restore_path,
-            "--files-from",
-            tmp_path,
-        ]
-        app.logger.info("Running restore command with files-from: %s", " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            app.logger.error("restic restore failed (files-from): %s", result.stderr)
-            raise RuntimeError(f"restic restore failed: {result.stderr}")
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                app.logger.warning(
-                    "Failed to remove temporary files-from list: %s", tmp_path
-                )
+    if not success:
+        # Raise so the caller can set restore_status = "error"
+        raise RuntimeError(f"restic restore failed. See logs for details.\n{logs}")
+
+    return logs
 
 
 def _build_tree(entries):
@@ -315,22 +332,25 @@ def snapshot_tree_node_api(snapshot_id):
     return jsonify({"entries": children})
 
 
-@app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
+@app.route("/snapshot/<snapshot_id>, methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
     restore_status = None
+    restore_logs = ""
 
     if request.method == "POST":
         selected_paths = request.form.getlist("selected_paths")
         restore_path = request.form.get("restore_path", "").strip()
         if selected_paths and restore_path:
             try:
-                _run_restore(snapshot_id, restore_path, selected_paths)
+                restore_logs = _run_restore(snapshot_id, restore_path, selected_paths)
                 restore_status = "completed"
             except Exception as e:
                 app.logger.error(
                     "Restore error for snapshot %s: %s", snapshot_id, e
                 )
                 restore_status = "error"
+                # If the exception message contains logs, surface them
+                restore_logs = str(e)
 
     template = """
     <!doctype html>
@@ -444,7 +464,10 @@ def snapshot_detail(snapshot_id):
                       </div>
                     {% endif %}
                   </div>
-                  <div id="restore-log" class="restore-log-box hidden"></div>
+                  <div
+                    id="restore-log"
+                    class="restore-log-box {% if not restore_logs %}hidden{% endif %}"
+                  >{{ restore_logs }}</div>
                 </div>
               </fieldset>
             </form>
@@ -586,7 +609,10 @@ def snapshot_detail(snapshot_id):
     </html>
     """
     return render_template_string(
-        template, snapshot_id=snapshot_id, restore_status=restore_status
+        template,
+        snapshot_id=snapshot_id,
+        restore_status=restore_status,
+        restore_logs=restore_logs,
     )
 
 
