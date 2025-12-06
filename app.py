@@ -213,58 +213,48 @@ def snapshot_detail(snapshot_id):
     """
     return render_template_string(template, snapshot_id=snapshot_id)
 
-def _parse_restic_ls_lines(lines):
+def _list_children(entries, parent_path):
     """
-    Helper: parse `restic ls` output lines into a list of paths.
-    Assumes the path is the last whitespace-separated token.
-    """
-    paths = []
-    for line in lines:
-        parts = line.strip().split()
-        if not parts:
-            continue
-        path = parts[-1]
-        if path:
-            paths.append(path)
-    return paths
-
-def _list_children(paths, parent_path):
-    """
-    Given a list of full paths and a parent path ('' for root),
-    return a list of direct children entries:
+    Given a list of restic entries (dicts with 'path' and 'type') and a parent
+    path ('' for root), return a list of direct children entries:
       [{ "name": <str>, "path": <str>, "type": "file"|"dir" }]
     """
     children = {}
-    prefix = parent_path.rstrip('/')
+    # Normalise parent path: '' (root) or 'dir/subdir'
+    prefix = parent_path.strip('/')
     if prefix:
         prefix = prefix + '/'
-    # For root, prefix is ''
+    else:
+        prefix = ''
 
-    for p in paths:
-        if not p.startswith(prefix):
+    for e in entries:
+        path = e.get("path", "").lstrip("/")
+        if not path.startswith(prefix):
             continue
-        # Strip prefix
-        rest = p[len(prefix):]
+
+        rest = path[len(prefix):]
         if not rest:
             continue
+
         # Only direct children: split once
         parts = rest.split('/', 1)
         name = parts[0]
-        is_dir = len(parts) > 1
-        child_path = prefix + name
-        # If we already saw this child, upgrade to dir if needed
+        is_dir = len(parts) > 1 or e.get("type") == "dir"
+        child_path = (prefix + name).rstrip('/')
+
         existing = children.get(name)
         if existing:
+            # Upgrade to dir if any entry indicates it's a dir
             if is_dir and existing["type"] == "file":
                 existing["type"] = "dir"
             continue
+
         children[name] = {
             "name": name,
             "path": child_path,
             "type": "dir" if is_dir else "file",
         }
 
-    # Return sorted by name
     return [children[name] for name in sorted(children.keys())]
 
 @app.route("/api/snapshot/<snapshot_id>/tree/root")
@@ -273,10 +263,9 @@ def snapshot_tree_root_api(snapshot_id):
     Return the top-level entries of the snapshot (lazy root).
     """
     restic = ResticUI()
-    contents = restic.get_snapshot_contents(snapshot_id)
-    paths = _parse_restic_ls_lines(contents)
-    entries = _list_children(paths, parent_path="")
-    return jsonify({"entries": entries})
+    entries = restic.get_snapshot_contents(snapshot_id)
+    children = _list_children(entries, parent_path="")
+    return jsonify({"entries": children})
 
 @app.route("/api/snapshot/<snapshot_id>/tree/node")
 def snapshot_tree_node_api(snapshot_id):
@@ -289,10 +278,9 @@ def snapshot_tree_node_api(snapshot_id):
         abort(400, description="Missing 'path' parameter")
 
     restic = ResticUI()
-    contents = restic.get_snapshot_contents(snapshot_id)
-    paths = _parse_restic_ls_lines(contents)
-    entries = _list_children(paths, parent_path=parent_path)
-    return jsonify({"entries": entries})
+    entries = restic.get_snapshot_contents(snapshot_id)
+    children = _list_children(entries, parent_path=parent_path)
+    return jsonify({"entries": children})
 
 if __name__ == "__main__":
     app.run(host="100.69.69.69")
