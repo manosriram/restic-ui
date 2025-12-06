@@ -25,20 +25,42 @@ def default_route():
 def snapshot_detail(snapshot_id):
     restic = ResticUI()
     contents = restic.get_snapshot_contents(snapshot_id)
+
+    # Build a tree structure from the flat list of paths
+    tree = {}
+    for line in contents:
+        parts = line.strip().split()
+        # The last part is the path, e.g. "path/to/file"
+        path = parts[-1] if parts else ""
+        if not path:
+            continue
+        segments = path.split('/')
+        current = tree
+        for segment in segments:
+            current = current.setdefault(segment, {})
+
+    def render_tree(d):
+        html = "<ul>"
+        for key, subtree in sorted(d.items()):
+            if subtree:
+                html += f"<li>{key}{render_tree(subtree)}</li>"
+            else:
+                html += f"<li>{key}</li>"
+        html += "</ul>"
+        return html
+
+    tree_html = render_tree(tree)
+
     template = """
     <h1>Snapshot {{ snapshot_id }} Contents</h1>
-    {% if contents %}
-    <ul>
-    {% for item in contents %}
-      <li>{{ item }}</li>
-    {% endfor %}
-    </ul>
+    {% if tree_html %}
+      {{ tree_html|safe }}
     {% else %}
-    <p>No contents found or error retrieving snapshot.</p>
+      <p>No contents found or error retrieving snapshot.</p>
     {% endif %}
     <p><a href="/">Back to snapshots</a></p>
     """
-    return render_template_string(template, snapshot_id=snapshot_id, contents=contents)
+    return render_template_string(template, snapshot_id=snapshot_id, tree_html=tree_html)
 
 if __name__ == "__main__":
     app.run(host="100.69.69.69")
