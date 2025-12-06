@@ -15,7 +15,6 @@ restic = ResticUI()
 
 SNAPSHOTS_PER_PAGE = 20
 
-
 @app.route("/")
 def default_route():
     # Use ResticUI's own cached snapshots to avoid repeated CLI calls
@@ -210,7 +209,7 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
 
     if len(selected_paths) <= FILES_FROM_THRESHOLD:
         # Use multiple --include flags
-        cmd = ["restic", "restore", snapshot_id, "--target", restore_path]
+        cmd = ["/usr/bin/restic", "restore", snapshot_id, "--target", restore_path]
         for path in selected_paths:
             # Paths come from our own UI, but still strip whitespace
             cmd.extend(["--include", path.strip()])
@@ -230,7 +229,7 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
                 f.write(p.strip() + "\n")
 
         cmd = [
-            "restic",
+            "/usr/bin/restic",
             "restore",
             snapshot_id,
             "--target",
