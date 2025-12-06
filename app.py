@@ -176,7 +176,7 @@ def snapshot_tree_node_api(snapshot_id):
     children.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
     return jsonify({"entries": children})
 
-@app.route("/snapshot/<snapshot_id>, methods=["GET", "POST"])
+@app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
     restore_status = None
 
