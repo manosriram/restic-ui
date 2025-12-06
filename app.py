@@ -6,9 +6,11 @@ from restic import ResticUI
 
 app = Flask(__name__)
 
+# Single shared ResticUI instance so its internal cache is reused
+restic = ResticUI()
+
 @app.route("/")
 def default_route():
-    restic = ResticUI()
     # Cache snapshots in memory for 10 seconds to reduce CLI calls
     if not hasattr(restic, "_cached_snapshots") or (restic._cache_time + 10) < time.time():
         restic._cached_snapshots = restic.get_snapshots()
@@ -30,8 +32,6 @@ def default_route():
 
 @app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
-    restic = ResticUI()
-
     if request.method == "POST":
         selected_paths = request.form.getlist("selected_paths")
         restore_path = request.form.get("restore_path", "").strip()
@@ -262,7 +262,6 @@ def snapshot_tree_root_api(snapshot_id):
     """
     Return the top-level entries of the snapshot (lazy root).
     """
-    restic = ResticUI()
     entries = restic.get_snapshot_contents(snapshot_id)
     children = _list_children(entries, parent_path="")
     return jsonify({"entries": children})
@@ -277,7 +276,6 @@ def snapshot_tree_node_api(snapshot_id):
     if parent_path is None:
         abort(400, description="Missing 'path' parameter")
 
-    restic = ResticUI()
     entries = restic.get_snapshot_contents(snapshot_id)
     children = _list_children(entries, parent_path=parent_path)
     return jsonify({"entries": children})
