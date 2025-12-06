@@ -18,11 +18,8 @@ SNAPSHOTS_PER_PAGE = 20
 
 @app.route("/")
 def default_route():
-    # Cache snapshots in memory for 10 seconds to reduce CLI calls
-    if not hasattr(restic, "_cached_snapshots") or (getattr(restic, "_cache_time", 0) + 10) < time.time():
-        restic._cached_snapshots = restic.get_snapshots()
-        restic._cache_time = time.time()
-    all_snapshots = restic._cached_snapshots or []
+    # Use ResticUI's own cached snapshots to avoid repeated CLI calls
+    all_snapshots = restic.get_snapshots() or []
 
     # Sort snapshots by time descending and format timestamp
     def parse_time(s):
@@ -41,19 +38,22 @@ def default_route():
             return None
 
     for snap in all_snapshots:
-        dt = parse_time(snap.get("time"))
-        snap["_parsed_time"] = dt
-        if dt is not None:
-            snap["_human_time"] = dt.strftime("%Y-%m-%d %H:%M:%S")
-        else:
-            snap["_human_time"] = snap.get("time", "")
+        # Only compute/attach parsed time once per snapshot object
+        if "_parsed_time" not in snap:
+            dt = parse_time(snap.get("time"))
+            snap["_parsed_time"] = dt
+            if dt is not None:
+                snap["_human_time"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                snap["_human_time"] = snap.get("time", "")
 
         # Normalize tags for display (restic uses "tags": ["a","b"] or may omit)
-        tags = snap.get("tags") or []
-        if isinstance(tags, list):
-            snap["_tags_display"] = ", ".join(tags)
-        else:
-            snap["_tags_display"] = str(tags)
+        if "_tags_display" not in snap:
+            tags = snap.get("tags") or []
+            if isinstance(tags, list):
+                snap["_tags_display"] = ", ".join(tags)
+            else:
+                snap["_tags_display"] = str(tags)
 
     all_snapshots.sort(key=lambda s: s.get("_parsed_time") or datetime.min, reverse=True)
 
