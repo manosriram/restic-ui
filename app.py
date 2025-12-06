@@ -277,21 +277,6 @@ def snapshot_detail(snapshot_id):
           max-width: 1200px;
           margin: 0 auto;
         }
-        .caret {
-          cursor: pointer;
-          user-select: none;
-          display: inline-block;
-          margin-left: 4px;
-        }
-        .caret::before {
-          content: "\\25B6"; /* right-pointing triangle */
-          display: inline-block;
-          transform: rotate(0deg);
-          transition: transform 0.15s ease;
-        }
-        .caret-down::before {
-          transform: rotate(90deg);
-        }
         .nested {
           margin-left: 1.2em;
         }
@@ -301,6 +286,15 @@ def snapshot_detail(snapshot_id):
         .dir-label {
           text-decoration: underline;
           cursor: pointer;
+        }
+        .restore-controls {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin-top: 0.5rem;
+        }
+        .restore-controls input[type="text"] {
+          flex: 1 1 auto;
         }
       </style>
     </head>
@@ -334,7 +328,14 @@ def snapshot_detail(snapshot_id):
                 <legend>Restore options</legend>
 
                 <div>
-                  <label for="restore_path">Restore path:</label>
+                  <label>Snapshot contents:</label>
+                  <div id="tree-container" class="tree-loading">
+                    Loading snapshot contents...
+                  </div>
+                </div>
+
+                <div class="restore-controls">
+                  <label for="restore_path" style="margin: 0;">Restore path:</label>
                   <input
                     type="text"
                     id="restore_path"
@@ -342,17 +343,11 @@ def snapshot_detail(snapshot_id):
                     required
                     placeholder="/path/to/restore"
                   />
-                  <small>Files and directories will be restored under this path.</small>
+                  <button type="submit">Restore selected</button>
                 </div>
+                <small>Files and directories will be restored under this path.</small>
 
-                <div>
-                  <label>Snapshot contents:</label>
-                  <div id="tree-container" class="tree-loading">
-                    Loading snapshot contents...
-                  </div>
-                </div>
-
-                <div>
+                <div style="margin-top: 0.5rem;">
                   <div id="restore-status">
                     {% if restore_status == 'completed' %}
                       <div class="terminal-alert terminal-alert-primary">
@@ -364,10 +359,6 @@ def snapshot_detail(snapshot_id):
                       </div>
                     {% endif %}
                   </div>
-                </div>
-
-                <div>
-                  <button type="submit">Restore selected</button>
                 </div>
               </fieldset>
             </form>
