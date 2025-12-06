@@ -62,6 +62,11 @@ def default_route():
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <link rel="stylesheet" href="https://unpkg.com/terminal.css@0.7.4/dist/terminal.min.css" />
       <style>
+        /* Make the main container wider than the default Terminal CSS width */
+        .wide-container {
+          max-width: 1200px;
+          margin: 0 auto;
+        }
         /* Make the table a bit wider and allow horizontal scrolling if needed */
         .snapshots-wrapper {
           max-width: 100%;
@@ -73,7 +78,7 @@ def default_route():
       </style>
     </head>
     <body class="terminal">
-      <div class="container">
+      <div class="container wide-container">
         <header>
           <div class="terminal-nav">
             <div class="terminal-logo">
@@ -268,6 +273,10 @@ def snapshot_detail(snapshot_id):
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <link rel="stylesheet" href="https://unpkg.com/terminal.css@0.7.4/dist/terminal.min.css" />
       <style>
+        .wide-container {
+          max-width: 1200px;
+          margin: 0 auto;
+        }
         .caret {
           cursor: pointer;
           user-select: none;
@@ -296,7 +305,7 @@ def snapshot_detail(snapshot_id):
       </style>
     </head>
     <body class="terminal">
-      <div class="container">
+      <div class="container wide-container">
         <header>
           <div class="terminal-nav">
             <div class="terminal-logo">
