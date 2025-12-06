@@ -268,6 +268,10 @@ def snapshot_detail(snapshot_id):
         .tree-loading {
           font-style: italic;
         }
+        .dir-label {
+          text-decoration: underline;
+          cursor: pointer;
+        }
       </style>
     </head>
     <body class="terminal">
@@ -386,16 +390,21 @@ def snapshot_detail(snapshot_id):
             const safeLabel = escapeHtml(entry.name);
             const checkbox =
               '<input type="checkbox" name="selected_paths" value="' + escapeHtml(fullPath) + '" id="' + safeId + '"> ';
-            const label =
-              '<label for="' + safeId + '">' + safeLabel + '</label>';
 
             if (entry.type === 'dir') {
+              // Directory: label is clickable/underlined and toggles children
+              const label =
+                '<span class="dir-label" data-path="' + escapeHtml(fullPath) + '" onclick="onDirLabelClick(this)">' +
+                safeLabel +
+                '</span>';
+
               html += '<li>';
               html += checkbox + label;
-              html += '<span class="caret" data-path="' + escapeHtml(fullPath) + '" data-loaded="false" onclick="onCaretClick(this)"></span>';
-              html += '<div class="nested" style="display:none;"></div>';
+              html += '<div class="nested" style="display:none;" data-loaded="false"></div>';
               html += '</li>';
             } else {
+              const label =
+                '<label for="' + safeId + '">' + safeLabel + '</label>';
               html += '<li>' + checkbox + label + '</li>';
             }
           }
@@ -403,17 +412,17 @@ def snapshot_detail(snapshot_id):
           return html;
         }
 
-        async function onCaretClick(element) {
-          const nested = element.nextElementSibling;
-          const path = element.getAttribute('data-path');
-          const loaded = element.getAttribute('data-loaded') === 'true';
+        async function onDirLabelClick(labelEl) {
+          const parentLi = labelEl.parentElement;
+          const nested = parentLi.querySelector('.nested');
+          const path = labelEl.getAttribute('data-path');
+          const loaded = nested.getAttribute('data-loaded') === 'true';
 
-          if (nested.style.display === 'none') {
+          // Toggle visibility
+          if (nested.style.display === 'none' || nested.style.display === '') {
             nested.style.display = 'block';
-            element.classList.add('caret-down');
           } else if (loaded) {
             nested.style.display = 'none';
-            element.classList.remove('caret-down');
             return;
           }
 
@@ -432,7 +441,7 @@ def snapshot_detail(snapshot_id):
             }
             const data = await response.json();
             nested.innerHTML = buildNodeListHtml(data.entries, path);
-            element.setAttribute('data-loaded', 'true');
+            nested.setAttribute('data-loaded', 'true');
           } catch (e) {
             nested.innerHTML = '<div class="terminal-alert terminal-alert-error">Error loading directory.</div>';
           }
