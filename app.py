@@ -90,7 +90,7 @@ def default_route():
                   {% for snap in snapshots %}
                     <tr>
                       <td>
-                        <a href="/snapshot/{{ snap.id }}"><code>{{ snap.id }}</code></a>
+                        <a href="/snapshot/{{ snap.id }}">{{ snap.id }}</a>
                       </td>
                       <td>{{ snap._human_time }}</td>
                       <td>{{ snap.hostname }}</td>
