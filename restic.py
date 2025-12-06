@@ -29,7 +29,7 @@ class ResticUI:
 
         try:
             result = subprocess.run(
-                ["restic", "snapshots", "--json"],
+                ["/usr/bin/restic", "snapshots", "--json"],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -62,7 +62,7 @@ class ResticUI:
 
         try:
             result = subprocess.run(
-                ["restic", "ls", "--json", snapshot_id],
+                ["/usr/bin/restic", "ls", "--json", snapshot_id],
                 capture_output=True,
                 text=True,
                 check=True,
