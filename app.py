@@ -1,5 +1,7 @@
 import time
 import subprocess
+import tempfile
+import os
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify, abort
 
 from restic import ResticUI
@@ -30,18 +32,73 @@ def default_route():
     """
     return render_template_string(template, snapshots=snapshots)
 
+def _run_restore(snapshot_id, restore_path, selected_paths):
+    """
+    Run a single restic restore command for all selected paths.
+
+    - For a small number of paths, use multiple --include flags.
+    - For many paths, write them to a temporary file and use --files-from.
+    """
+    # Basic sanity checks; you can tighten these as needed
+    restore_path = restore_path.strip()
+    if not restore_path:
+        raise ValueError("Empty restore_path")
+
+    # Threshold for switching to --files-from
+    FILES_FROM_THRESHOLD = 100
+
+    if len(selected_paths) == 0:
+        raise ValueError("No paths selected for restore")
+
+    if len(selected_paths) <= FILES_FROM_THRESHOLD:
+        # Use multiple --include flags
+        cmd = ["restic", "restore", snapshot_id, "--target", restore_path]
+        for path in selected_paths:
+            # Paths come from our own UI, but still strip whitespace
+            cmd.extend(["--include", path.strip()])
+        app.logger.info("Running restore command: %s", " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            app.logger.error("restic restore failed (includes): %s", result.stderr)
+            raise RuntimeError(f"restic restore failed: {result.stderr}")
+        return
+
+    # Many paths: use --files-from
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+            tmp_path = f.name
+            for p in selected_paths:
+                f.write(p.strip() + "\n")
+
+        cmd = [
+            "restic", "restore", snapshot_id,
+            "--target", restore_path,
+            "--files-from", tmp_path,
+        ]
+        app.logger.info("Running restore command with files-from: %s", " ".join(cmd))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            app.logger.error("restic restore failed (files-from): %s", result.stderr)
+            raise RuntimeError(f"restic restore failed: {result.stderr}")
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                app.logger.warning("Failed to remove temporary files-from list: %s", tmp_path)
+
 @app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
     if request.method == "POST":
         selected_paths = request.form.getlist("selected_paths")
         restore_path = request.form.get("restore_path", "").strip()
         if selected_paths and restore_path:
-            for path in selected_paths:
-                subprocess.run([
-                    "restic", "restore", snapshot_id,
-                    "--target", restore_path,
-                    "--include", path
-                ])
+            try:
+                _run_restore(snapshot_id, restore_path, selected_paths)
+            except Exception as e:
+                # For now we just log and redirect; you could render an error page instead
+                app.logger.error("Restore error for snapshot %s: %s", snapshot_id, e)
             return redirect(url_for("snapshot_detail", snapshot_id=snapshot_id))
 
     # Initial page render: we don't build the whole tree here anymore
