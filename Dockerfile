@@ -1,55 +1,42 @@
 # Use a slim Python base image
 FROM python:3.12-slim
 
-# Install system dependencies needed by restic and curl (for healthcheck)
+# Install restic and any needed OS tools
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+        restic \
         ca-certificates \
         curl \
-        fuse \
-        wget \
-        bzip2 && \
-    rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
 
-# Install restic binary
-# You can adjust RESTIC_VERSION as needed.
-ENV RESTIC_VERSION=0.16.4
-RUN ARCH="$(uname -m)"; \
-    case "$ARCH" in \
-      x86_64) RESTIC_ARCH=amd64 ;; \
-      aarch64) RESTIC_ARCH=arm64 ;; \
-      armv7l) RESTIC_ARCH=arm ;; \
-      *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
-    esac && \
-    wget -O /tmp/restic.bz2 \
-      "https://github.com/restic/restic/releases/download/v${RESTIC_VERSION}/restic_${RESTIC_VERSION}_linux_${RESTIC_ARCH}.bz2" && \
-    bunzip2 /tmp/restic.bz2 && \
-    mv /tmp/restic /usr/local/bin/restic && \
-    chmod +x /usr/local/bin/restic
-
-# Set workdir
+# Set work directory
 WORKDIR /app
 
-# Copy dependency metadata first for better build caching
+# Copy project metadata first (for better Docker layer caching)
 COPY pyproject.toml uv.lock ./
 
-# Install uv and project dependencies into the system environment
-RUN pip install --no-cache-dir uv && \
-    uv pip install --system .
+# Install uv (fast Python package/dependency manager)
+RUN pip install --no-cache-dir uv Flask
 
-# Copy the rest of the application code
+# Install dependencies using the lockfile
+RUN uv sync --frozen --no-dev
+
+# Copy the rest of the application source
 COPY . .
 
-# Environment defaults (can be overridden in docker-compose.yml)
-ENV FLASK_ENV=production \
-    RESTIC_UI_SNAPSHOTS_PER_PAGE=20 \
-    RESTIC_UI_RESTIC_TIMEOUT=30 \
-    RESTIC_UI_RESTORE_TIMEOUT=3600 \
-    PYTHONUNBUFFERED=1
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+ENV FLASK_ENV=production
+ENV FLASK_APP=app.py
+# Default restic repo location inside container; can be overridden
+# ENV RESTIC_REPOSITORY=s3:s3.eu-central-003.backblazeb2.com/mano-homelab-backup
+# ENV RESTIC_PASSWORD_FILE=/etc/restic-password
 
-# Expose the port gunicorn will listen on
+# Create directory for restic repository (can be backed by a volume)
+# RUN mkdir -p /data/repo
+
+# Expose the port the app listens on
 EXPOSE 8000
 
-# Use gunicorn to serve the Flask app
-# Assumes the Flask app instance is named "app" in app.py
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:8000", "app:app"]
+# Default command: run the Flask app
+CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=8000"]
