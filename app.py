@@ -364,6 +364,23 @@ def snapshot_detail(snapshot_id):
         .restore-controls input[type="text"] {
           flex: 1 1 auto;
         }
+        .restore-log-box {
+          margin-top: 0.5rem;
+          border: 1px solid #666;
+          padding: 0.5rem;
+          max-height: 200px;
+          overflow-y: auto;
+          font-family: monospace;
+          font-size: 0.9rem;
+          white-space: pre-wrap;
+          background-color: #111;
+        }
+        .restore-log-box.hidden {
+          display: none;
+        }
+        .terminal-alert-success {
+          border-color: #00ff00 !important;
+        }
       </style>
     </head>
     <body class="terminal">
@@ -418,7 +435,7 @@ def snapshot_detail(snapshot_id):
                 <div style="margin-top: 0.5rem;">
                   <div id="restore-status">
                     {% if restore_status == 'completed' %}
-                      <div class="terminal-alert terminal-alert-primary">
+                      <div class="terminal-alert terminal-alert-primary terminal-alert-success">
                         Restore completed
                       </div>
                     {% elif restore_status == 'error' %}
@@ -427,6 +444,7 @@ def snapshot_detail(snapshot_id):
                       </div>
                     {% endif %}
                   </div>
+                  <div id="restore-log" class="restore-log-box hidden"></div>
                 </div>
               </fieldset>
             </form>
@@ -549,9 +567,14 @@ def snapshot_detail(snapshot_id):
           }
 
           const statusEl = document.getElementById("restore-status");
+          const logEl = document.getElementById("restore-log");
           if (statusEl) {
             statusEl.innerHTML =
               '<div class="terminal-alert terminal-alert-primary">Restore in progress</div>';
+          }
+          if (logEl) {
+            logEl.classList.remove('hidden');
+            logEl.textContent = 'Running restic restore... logs will appear here when the operation finishes.';
           }
 
           return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
