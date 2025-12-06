@@ -3,7 +3,8 @@ import subprocess
 import tempfile
 import os
 from datetime import datetime
-from flask import Flask, render_template_string, request, jsonify, abort
+from math import ceil
+from flask import Flask, render_template_string, request, jsonify, abort, url_for
 
 from restic import ResticUI
 
@@ -12,13 +13,16 @@ app = Flask(__name__)
 # Single shared ResticUI instance so its internal cache is reused
 restic = ResticUI()
 
+SNAPSHOTS_PER_PAGE = 20
+
+
 @app.route("/")
 def default_route():
     # Cache snapshots in memory for 10 seconds to reduce CLI calls
-    if not hasattr(restic, "_cached_snapshots") or (restic._cache_time + 10) < time.time():
+    if not hasattr(restic, "_cached_snapshots") or (getattr(restic, "_cache_time", 0) + 10) < time.time():
         restic._cached_snapshots = restic.get_snapshots()
         restic._cache_time = time.time()
-    snapshots = restic._cached_snapshots or []
+    all_snapshots = restic._cached_snapshots or []
 
     # Sort snapshots by time descending and format timestamp
     def parse_time(s):
@@ -36,7 +40,7 @@ def default_route():
         except ValueError:
             return None
 
-    for snap in snapshots:
+    for snap in all_snapshots:
         dt = parse_time(snap.get("time"))
         snap["_parsed_time"] = dt
         if dt is not None:
@@ -51,7 +55,25 @@ def default_route():
         else:
             snap["_tags_display"] = str(tags)
 
-    snapshots.sort(key=lambda s: s.get("_parsed_time") or datetime.min, reverse=True)
+    all_snapshots.sort(key=lambda s: s.get("_parsed_time") or datetime.min, reverse=True)
+
+    # Pagination
+    try:
+        page = int(request.args.get("page", "1"))
+    except ValueError:
+        page = 1
+    if page < 1:
+        page = 1
+
+    total = len(all_snapshots)
+    per_page = SNAPSHOTS_PER_PAGE
+    total_pages = max(1, ceil(total / per_page)) if total else 1
+    if page > total_pages:
+        page = total_pages
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    snapshots = all_snapshots[start:end]
 
     template = """
     <!doctype html>
@@ -74,6 +96,15 @@ def default_route():
         }
         .snapshots-table {
           min-width: 70rem; /* increase logical width of the table */
+        }
+        .pagination {
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          margin-top: 0.75rem;
+        }
+        .pagination span {
+          display: inline-block;
         }
       </style>
     </head>
@@ -124,6 +155,22 @@ def default_route():
                   </tbody>
                 </table>
               </div>
+
+              <div class="pagination">
+                {% if page > 1 %}
+                  <a href="{{ url_for('default_route', page=page-1) }}">&larr; Previous</a>
+                {% else %}
+                  <span>&larr; Previous</span>
+                {% endif %}
+
+                <span>Page {{ page }} of {{ total_pages }}</span>
+
+                {% if page < total_pages %}
+                  <a href="{{ url_for('default_route', page=page+1) }}">Next &rarr;</a>
+                {% else %}
+                  <span>Next &rarr;</span>
+                {% endif %}
+              </div>
             {% else %}
               <div class="terminal-alert">
                 No snapshots found.
@@ -135,7 +182,13 @@ def default_route():
     </body>
     </html>
     """
-    return render_template_string(template, snapshots=snapshots)
+    return render_template_string(
+        template,
+        snapshots=snapshots,
+        page=page,
+        total_pages=total_pages,
+    )
+
 
 def _run_restore(snapshot_id, restore_path, selected_paths):
     """
@@ -177,9 +230,13 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
                 f.write(p.strip() + "\n")
 
         cmd = [
-            "restic", "restore", snapshot_id,
-            "--target", restore_path,
-            "--files-from", tmp_path,
+            "restic",
+            "restore",
+            snapshot_id,
+            "--target",
+            restore_path,
+            "--files-from",
+            tmp_path,
         ]
         app.logger.info("Running restore command with files-from: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
@@ -191,7 +248,10 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
             try:
                 os.unlink(tmp_path)
             except OSError:
-                app.logger.warning("Failed to remove temporary files-from list: %s", tmp_path)
+                app.logger.warning(
+                    "Failed to remove temporary files-from list: %s", tmp_path
+                )
+
 
 def _build_tree(entries):
     """
@@ -220,6 +280,7 @@ def _build_tree(entries):
         )
     return tree
 
+
 @app.route("/api/snapshot/<snapshot_id>/tree-root")
 def snapshot_tree_root_api(snapshot_id):
     """
@@ -231,8 +292,11 @@ def snapshot_tree_root_api(snapshot_id):
     tree = _build_tree(entries)
     root_entries = tree.get("", [])
     # Sort directories first, then files, then by name
-    root_entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
+    root_entries.sort(
+        key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower())
+    )
     return jsonify({"entries": root_entries})
+
 
 @app.route("/api/snapshot/<snapshot_id>/tree-node")
 def snapshot_tree_node_api(snapshot_id):
@@ -246,8 +310,11 @@ def snapshot_tree_node_api(snapshot_id):
         abort(404)
     tree = _build_tree(entries)
     children = tree.get(dir_path, [])
-    children.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
+    children.sort(
+        key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower())
+    )
     return jsonify({"entries": children})
+
 
 @app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
@@ -261,7 +328,9 @@ def snapshot_detail(snapshot_id):
                 _run_restore(snapshot_id, restore_path, selected_paths)
                 restore_status = "completed"
             except Exception as e:
-                app.logger.error("Restore error for snapshot %s: %s", snapshot_id, e)
+                app.logger.error(
+                    "Restore error for snapshot %s: %s", snapshot_id, e
+                )
                 restore_status = "error"
 
     template = """
@@ -494,7 +563,10 @@ def snapshot_detail(snapshot_id):
     </body>
     </html>
     """
-    return render_template_string(template, snapshot_id=snapshot_id, restore_status=restore_status)
+    return render_template_string(
+        template, snapshot_id=snapshot_id, restore_status=restore_status
+    )
+
 
 if __name__ == "__main__":
     app.run(host="100.69.69.69")
