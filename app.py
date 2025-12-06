@@ -120,7 +120,63 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
             except OSError:
                 app.logger.warning("Failed to remove temporary files-from list: %s", tmp_path)
 
-@app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
+def _build_tree(entries):
+    """
+    Build a simple directory tree index from flat restic entries.
+
+    Returns a dict:
+      {
+        "": [ {name, path, type}, ... ],          # root entries
+        "some/dir": [ {name, path, type}, ... ],  # children of 'some/dir'
+        ...
+      }
+    """
+    tree = {}
+    for e in entries:
+        path = e["path"]
+        parts = path.split("/")
+        if len(parts) == 1:
+            parent = ""
+            name = parts[0]
+        else:
+            parent = "/".join(parts[:-1])
+            name = parts[-1]
+        node_type = e.get("type") or "file"
+        tree.setdefault(parent, []).append(
+            {"name": name, "path": path, "type": node_type}
+        )
+    return tree
+
+@app.route("/api/snapshot/<snapshot_id>/tree-root")
+def snapshot_tree_root_api(snapshot_id):
+    """
+    Return the top-level entries for a snapshot.
+    """
+    entries = restic.get_snapshot_contents(snapshot_id)
+    if entries is None:
+        abort(404)
+    tree = _build_tree(entries)
+    root_entries = tree.get("", [])
+    # Sort directories first, then files, then by name
+    root_entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
+    return jsonify({"entries": root_entries})
+
+@app.route("/api/snapshot/<snapshot_id>/tree-node")
+def snapshot_tree_node_api(snapshot_id):
+    """
+    Return the direct children of a given directory path within a snapshot.
+    Query param: ?path=<dir_path>
+    """
+    dir_path = request.args.get("path", "").strip()
+    entries = restic.get_snapshot_contents(snapshot_id)
+    if entries is None:
+        abort(404)
+    tree = _build_tree(entries)
+    children = tree.get(dir_path, [])
+    children.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
+    return jsonify({"entries": children})
+
+@app.route("/snapshot/<snapshot_id>, methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
     restore_status = None
 
