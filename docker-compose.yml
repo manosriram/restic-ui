@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  restic-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: restic-ui
+    # Expose the Flask/Gunicorn HTTP port
+    ports:
+      - "8000:8000"
+    environment:
+      # Flask / app config
+      FLASK_ENV: production
+      # Pagination / timeouts (tune as needed)
+      RESTIC_UI_SNAPSHOTS_PER_PAGE: "20"
+      RESTIC_UI_RESTIC_TIMEOUT: "30"      # seconds for listing commands
+      RESTIC_UI_RESTORE_TIMEOUT: "3600"   # seconds for restore commands
+
+      # Restic repository configuration – adjust to your setup
+      # Example for a local repo:
+      # RESTIC_REPOSITORY: /data/restic-repo
+      # RESTIC_PASSWORD_FILE: /run/secrets/restic_password
+
+      # If you use a remote backend (s3, b2, etc.), set the appropriate
+      # RESTIC_* environment variables here instead.
+    volumes:
+      # Mount your restic repository into the container
+      # Adjust the left-hand side path to your host repo location.
+      - ./restic-repo:/data/restic-repo:ro
+
+      # Optional: mount a directory where restores will be written
+      # so you can access restored files on the host.
+      - ./restores:/restores
+
+    # If you use Docker secrets for the restic password, uncomment:
+    # secrets:
+    #   - restic_password
+
+    # Ensure the container has the necessary capabilities for restic
+    # (usually not needed, but you can add if you hit permission issues)
+    # cap_add:
+    #   - SYS_ADMIN
+
+    # Healthcheck to ensure the app is responding
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# Example secret definition if you want to store the restic password securely.
+# You would then set RESTIC_PASSWORD_FILE=/run/secrets/restic_password
+# in the environment above.
+#secrets:
+#  restic_password:
+#    file: ./restic_password.txt
