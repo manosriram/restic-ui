@@ -319,7 +319,7 @@ def snapshot_detail(snapshot_id):
               <h1>Snapshot</h1>
               <p>
                 Snapshot ID:
-                <code>{{ snapshot_id }}</code>
+                {{ snapshot_id }}
               </p>
             </header>
 
