@@ -1,6 +1,6 @@
 import time
 import subprocess
-from flask import Flask, render_template_string, request, redirect, url_for, jsonify
+from flask import Flask, render_template_string, request, redirect, url_for, jsonify, abort
 
 from restic import ResticUI
 
@@ -59,7 +59,7 @@ def snapshot_detail(snapshot_id):
         content: "\\25B6"; /* right-pointing triangle */
         display: inline-block;
         transform: rotate(0deg);
-        transition: transform 0.3s ease;
+        transition: transform 0.2s ease;
       }
       .caret-down::before {
         transform: rotate(90deg);
@@ -73,10 +73,17 @@ def snapshot_detail(snapshot_id):
       label {
         cursor: pointer;
       }
+      .loading {
+        font-style: italic;
+        color: #666;
+      }
+      .error {
+        color: red;
+      }
     </style>
 
     <form id="restore-form" method="post" onsubmit="return confirmRestore()">
-      <div id="tree-container">
+      <div id="tree-container" class="loading">
         Loading snapshot contents...
       </div>
       <p>
@@ -89,61 +96,101 @@ def snapshot_detail(snapshot_id):
     <p><a href="/">Back to snapshots</a></p>
 
     <script>
-      async function loadTree() {
+      async function loadRoot() {
         const container = document.getElementById('tree-container');
+        container.classList.add('loading');
+        container.textContent = 'Loading snapshot contents...';
         try {
-          const response = await fetch('{{ url_for("snapshot_tree_api", snapshot_id=snapshot_id) }}');
+          const response = await fetch('{{ url_for("snapshot_tree_root_api", snapshot_id=snapshot_id) }}');
           if (!response.ok) {
+            container.classList.remove('loading');
+            container.classList.add('error');
             container.textContent = 'Error loading snapshot contents.';
             return;
           }
           const data = await response.json();
-          container.innerHTML = buildTreeHtml(data.tree, '');
-
-          if (data.truncated) {
-            const warning = document.createElement('p');
-            warning.style.color = 'red';
-            warning.textContent = 'Warning: tree truncated due to size limits; some entries may be missing.';
-            container.prepend(warning);
-          }
+          container.classList.remove('loading');
+          container.innerHTML = buildNodeListHtml(data.entries, '');
         } catch (e) {
+          container.classList.remove('loading');
+          container.classList.add('error');
           container.textContent = 'Error loading snapshot contents.';
         }
       }
 
-      function buildTreeHtml(node, prefix) {
+      function escapeHtml(text) {
+        const map = {
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#039;'
+        };
+        return text.replace(/[&<>"']/g, function(m) { return map[m]; });
+      }
+
+      function buildNodeListHtml(entries, prefix) {
+        // entries: [{name, path, type}]
         let html = '<ul style="list-style-type:none; padding-left: 1em;">';
-        const keys = Object.keys(node).sort();
-        for (const key of keys) {
-          const subtree = node[key];
-          const fullPath = prefix ? (prefix + '/' + key) : key;
-          if (Object.keys(subtree).length > 0) {
+        for (const entry of entries) {
+          const fullPath = entry.path;
+          const safeId = escapeHtml(fullPath).replace(/[^a-zA-Z0-9_-]/g, '_');
+          const safeLabel = escapeHtml(entry.name);
+          const checkbox = '<input type="checkbox" name="selected_paths" value="' + escapeHtml(fullPath) + '" id="' + safeId + '">';
+          const label = '<label for="' + safeId + '">' + safeLabel + '</label>';
+
+          if (entry.type === 'dir') {
+            // Directory: has caret and a nested container that will be filled lazily
             html += '<li>'
-              + '<input type="checkbox" name="selected_paths" value="' + fullPath + '" id="' + fullPath + '">'
-              + '<label for="' + fullPath + '">' + key + '</label> '
-              + '<span class="caret" onclick="toggleNested(this)"></span>'
-              + '<div class="nested" style="display:none;">'
-              + buildTreeHtml(subtree, fullPath)
-              + '</div>'
+              + checkbox + label + ' '
+              + '<span class="caret" data-path="' + escapeHtml(fullPath) + '" data-loaded="false" onclick="onCaretClick(this)"></span>'
+              + '<div class="nested" style="display:none;"></div>'
               + '</li>';
           } else {
-            html += '<li>'
-              + '<input type="checkbox" name="selected_paths" value="' + fullPath + '" id="' + fullPath + '">'
-              + '<label for="' + fullPath + '">' + key + '</label>'
-              + '</li>';
+            // File: just checkbox + label
+            html += '<li>' + checkbox + label + '</li>';
           }
         }
         html += '</ul>';
         return html;
       }
 
-      function toggleNested(element) {
-        element.classList.toggle("caret-down");
-        var nested = element.nextElementSibling;
-        if (nested.style.display === "none") {
-          nested.style.display = "block";
-        } else {
-          nested.style.display = "none";
+      async function onCaretClick(element) {
+        const nested = element.nextElementSibling;
+        const path = element.getAttribute('data-path');
+        const loaded = element.getAttribute('data-loaded') === 'true';
+
+        // Toggle visibility
+        if (nested.style.display === 'none') {
+          nested.style.display = 'block';
+          element.classList.add('caret-down');
+        } else if (loaded) {
+          // If already loaded, just hide/show
+          nested.style.display = 'none';
+          element.classList.remove('caret-down');
+          return;
+        }
+
+        if (loaded) {
+          // Already loaded and we just showed it above
+          return;
+        }
+
+        // Not loaded yet: fetch children
+        nested.innerHTML = '<span class="loading">Loading...</span>';
+        try {
+          const url = new URL('{{ url_for("snapshot_tree_node_api", snapshot_id=snapshot_id) }}', window.location.origin);
+          url.searchParams.set('path', path);
+          const response = await fetch(url.toString());
+          if (!response.ok) {
+            nested.innerHTML = '<span class="error">Error loading directory.</span>';
+            return;
+          }
+          const data = await response.json();
+          nested.innerHTML = buildNodeListHtml(data.entries, path);
+          element.setAttribute('data-loaded', 'true');
+        } catch (e) {
+          nested.innerHTML = '<span class="error">Error loading directory.</span>';
         }
       }
 
@@ -161,43 +208,91 @@ def snapshot_detail(snapshot_id):
         return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
       }
 
-      document.addEventListener('DOMContentLoaded', loadTree);
+      document.addEventListener('DOMContentLoaded', loadRoot);
     </script>
     """
     return render_template_string(template, snapshot_id=snapshot_id)
 
-@app.route("/api/snapshot/<snapshot_id>/tree")
-def snapshot_tree_api(snapshot_id):
+def _parse_restic_ls_lines(lines):
     """
-    API endpoint that returns a directory tree for the snapshot.
-    We still cap the number of entries processed to avoid pathological
-    repositories, but we no longer truncate by depth or insert artificial
-    path segments.
+    Helper: parse `restic ls` output lines into a list of paths.
+    Assumes the path is the last whitespace-separated token.
+    """
+    paths = []
+    for line in lines:
+        parts = line.strip().split()
+        if not parts:
+            continue
+        path = parts[-1]
+        if path:
+            paths.append(path)
+    return paths
+
+def _list_children(paths, parent_path):
+    """
+    Given a list of full paths and a parent path ('' for root),
+    return a list of direct children entries:
+      [{ "name": <str>, "path": <str>, "type": "file"|"dir" }]
+    """
+    children = {}
+    prefix = parent_path.rstrip('/')
+    if prefix:
+        prefix = prefix + '/'
+    # For root, prefix is ''
+
+    for p in paths:
+        if not p.startswith(prefix):
+            continue
+        # Strip prefix
+        rest = p[len(prefix):]
+        if not rest:
+            continue
+        # Only direct children: split once
+        parts = rest.split('/', 1)
+        name = parts[0]
+        is_dir = len(parts) > 1
+        child_path = prefix + name
+        # If we already saw this child, upgrade to dir if needed
+        existing = children.get(name)
+        if existing:
+            if is_dir and existing["type"] == "file":
+                existing["type"] = "dir"
+            continue
+        children[name] = {
+            "name": name,
+            "path": child_path,
+            "type": "dir" if is_dir else "file",
+        }
+
+    # Return sorted by name
+    return [children[name] for name in sorted(children.keys())]
+
+@app.route("/api/snapshot/<snapshot_id>/tree/root")
+def snapshot_tree_root_api(snapshot_id):
+    """
+    Return the top-level entries of the snapshot (lazy root).
     """
     restic = ResticUI()
     contents = restic.get_snapshot_contents(snapshot_id)
+    paths = _parse_restic_ls_lines(contents)
+    entries = _list_children(paths, parent_path="")
+    return jsonify({"entries": entries})
 
-    tree = {}
-    # Raise this significantly so typical repos are fully represented.
-    # If you want absolutely no cap, set max_entries = None and adjust the loop.
-    max_entries = 200000  # hard cap on number of paths processed
+@app.route("/api/snapshot/<snapshot_id>/tree/node")
+def snapshot_tree_node_api(snapshot_id):
+    """
+    Return the direct children of a given directory path within the snapshot.
+    Query param: ?path=<dir_path>
+    """
+    parent_path = request.args.get("path", "", type=str)
+    if parent_path is None:
+        abort(400, description="Missing 'path' parameter")
 
-    count = 0
-    for line in contents:
-        if max_entries is not None and count >= max_entries:
-            break
-        parts = line.strip().split()
-        path = parts[-1] if parts else ""
-        if not path:
-            continue
-        segments = path.split('/')
-        current = tree
-        for segment in segments:
-            current = current.setdefault(segment, {})
-        count += 1
-
-    truncated = max_entries is not None and count >= max_entries
-    return jsonify({"tree": tree, "truncated": truncated})
+    restic = ResticUI()
+    contents = restic.get_snapshot_contents(snapshot_id)
+    paths = _parse_restic_ls_lines(contents)
+    entries = _list_children(paths, parent_path=parent_path)
+    return jsonify({"entries": entries})
 
 if __name__ == "__main__":
     app.run(host="100.69.69.69")
