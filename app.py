@@ -47,20 +47,69 @@ def default_route():
     snapshots.sort(key=lambda s: s.get("_parsed_time") or datetime.min, reverse=True)
 
     template = """
-    <h1>Restic Snapshots</h1>
-    {% if snapshots %}
-    <ul>
-    {% for snap in snapshots %}
-      <li>
-        <a href="/snapshot/{{ snap.id }}">{{ snap.id }}</a>
-        - {{ snap._human_time }}
-        - {{ snap.hostname }}
-      </li>
-    {% endfor %}
-    </ul>
-    {% else %}
-    <p>No snapshots found.</p>
-    {% endif %}
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Restic Snapshots</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <script src="https://cdn.tailwindcss.com"></script>
+    </head>
+    <body class="bg-slate-100 text-slate-900">
+      <div class="min-h-screen flex flex-col">
+        <header class="bg-slate-900 text-white">
+          <div class="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+            <h1 class="text-xl font-semibold">Restic UI</h1>
+            <span class="text-xs text-slate-300">Snapshots</span>
+          </div>
+        </header>
+
+        <main class="flex-1">
+          <div class="max-w-5xl mx-auto px-4 py-6">
+            <div class="bg-white shadow-sm rounded-lg border border-slate-200">
+              <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                <h2 class="text-lg font-medium text-slate-900">Snapshots</h2>
+              </div>
+              <div class="p-4">
+                {% if snapshots %}
+                  <div class="overflow-x-auto">
+                    <table class="min-w-full text-sm">
+                      <thead>
+                        <tr class="border-b border-slate-200 text-left text-slate-500">
+                          <th class="py-2 pr-4 font-medium">ID</th>
+                          <th class="py-2 pr-4 font-medium">Time</th>
+                          <th class="py-2 pr-4 font-medium">Host</th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-slate-100">
+                        {% for snap in snapshots %}
+                          <tr class="hover:bg-slate-50">
+                            <td class="py-2 pr-4 font-mono text-xs">
+                              <a href="/snapshot/{{ snap.id }}" class="text-sky-600 hover:text-sky-800 underline decoration-sky-300">
+                                {{ snap.id }}
+                              </a>
+                            </td>
+                            <td class="py-2 pr-4 text-slate-800">
+                              {{ snap._human_time }}
+                            </td>
+                            <td class="py-2 pr-4 text-slate-700">
+                              {{ snap.hostname }}
+                            </td>
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                {% else %}
+                  <p class="text-sm text-slate-600">No snapshots found.</p>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </body>
+    </html>
     """
     return render_template_string(template, snapshots=snapshots)
 
@@ -191,190 +240,244 @@ def snapshot_detail(snapshot_id):
                 app.logger.error("Restore error for snapshot %s: %s", snapshot_id, e)
                 restore_status = "error"
 
-    # Initial page render or after POST: we don't build the whole tree here anymore
     template = """
-    <h1>Snapshot {{ snapshot_id }}</h1>
-    <style>
-      .caret {
-        cursor: pointer;
-        user-select: none;
-        display: inline-block;
-        margin-left: 6px;
-        color: black;
-      }
-      .caret::before {
-        content: "\\25B6"; /* right-pointing triangle */
-        display: inline-block;
-        transform: rotate(0deg);
-        transition: transform 0.2s ease;
-      }
-      .caret-down::before {
-        transform: rotate(90deg);
-      }
-      .nested {
-        margin-left: 1em;
-      }
-      form {
-        margin-top: 1em;
-      }
-      label {
-        cursor: pointer;
-      }
-      .loading {
-        font-style: italic;
-        color: #666;
-      }
-      .error {
-        color: red;
-      }
-      #restore-status {
-        margin-top: 0.5em;
-        font-style: italic;
-      }
-    </style>
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8">
+      <title>Snapshot {{ snapshot_id }}</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <script src="https://cdn.tailwindcss.com"></script>
+      <style>
+        .caret {
+          cursor: pointer;
+          user-select: none;
+          display: inline-block;
+          margin-left: 6px;
+          color: rgb(30 64 175); /* tailwind blue-800 */
+        }
+        .caret::before {
+          content: "\\25B6"; /* right-pointing triangle */
+          display: inline-block;
+          transform: rotate(0deg);
+          transition: transform 0.15s ease;
+        }
+        .caret-down::before {
+          transform: rotate(90deg);
+        }
+        .nested {
+          margin-left: 0.75rem;
+        }
+      </style>
+    </head>
+    <body class="bg-slate-100 text-slate-900">
+      <div class="min-h-screen flex flex-col">
+        <header class="bg-slate-900 text-white">
+          <div class="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <a href="/" class="text-xs text-slate-300 hover:text-white">&larr; Back</a>
+              <h1 class="text-lg font-semibold">Snapshot</h1>
+            </div>
+            <code class="text-[10px] bg-slate-800 px-2 py-1 rounded border border-slate-700">
+              {{ snapshot_id }}
+            </code>
+          </div>
+        </header>
 
-    <form id="restore-form" method="post" onsubmit="return confirmRestore()">
-      <div id="tree-container" class="loading">
-        Loading snapshot contents...
+        <main class="flex-1">
+          <div class="max-w-5xl mx-auto px-4 py-6 space-y-4">
+            <div class="bg-white shadow-sm rounded-lg border border-slate-200">
+              <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                <h2 class="text-sm font-medium text-slate-900">Restore</h2>
+                <span class="text-[11px] text-slate-500">Select paths and target directory</span>
+              </div>
+
+              <form id="restore-form" method="post" onsubmit="return confirmRestore()">
+                <div class="p-4 space-y-4">
+                  <div>
+                    <label for="restore_path" class="block text-xs font-medium text-slate-700 mb-1">
+                      Restore path
+                    </label>
+                    <input
+                      type="text"
+                      id="restore_path"
+                      name="restore_path"
+                      required
+                      placeholder="/path/to/restore"
+                      class="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500"
+                    >
+                    <p class="mt-1 text-[11px] text-slate-500">
+                      Files and directories will be restored under this path.
+                    </p>
+                  </div>
+
+                  <div>
+                    <div class="flex items-center justify-between mb-2">
+                      <label class="text-xs font-medium text-slate-700">
+                        Snapshot contents
+                      </label>
+                      <span id="tree-loading-label" class="text-[11px] text-slate-500">Loading…</span>
+                    </div>
+                    <div
+                      id="tree-container"
+                      class="rounded-md border border-slate-200 bg-slate-50 max-h-[420px] overflow-auto text-xs p-2"
+                    >
+                      Loading snapshot contents...
+                    </div>
+                  </div>
+
+                  <div class="flex items-center justify-between pt-2 border-t border-slate-200">
+                    <div id="restore-status" class="text-[11px] text-slate-500">
+                      {% if restore_status == 'completed' %}
+                        <span class="text-emerald-700 font-medium">Restore completed</span>
+                      {% elif restore_status == 'error' %}
+                        <span class="text-red-600 font-medium">Restore failed</span>
+                      {% endif %}
+                    </div>
+                    <button
+                      type="submit"
+                      class="inline-flex items-center gap-1 rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-sky-700 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-1"
+                    >
+                      Restore selected
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        </main>
       </div>
-      <p>
-        <label for="restore_path">Restore Path:</label>
-        <input type="text" id="restore_path" name="restore_path" required placeholder="/path/to/restore">
-      </p>
-      <button type="submit">Restore Selected</button>
-      <div id="restore-status">
-        {% if restore_status == 'completed' %}
-          Restore completed
-        {% elif restore_status == 'error' %}
-          Restore failed
-        {% endif %}
-      </div>
-    </form>
 
-    <p><a href="/">Back to snapshots</a></p>
-
-    <script>
-      async function loadRoot() {
-        const container = document.getElementById('tree-container');
-        container.classList.add('loading');
-        container.textContent = 'Loading snapshot contents...';
-        try {
-          const response = await fetch('{{ url_for("snapshot_tree_root_api", snapshot_id=snapshot_id) }}');
-          if (!response.ok) {
-            container.classList.remove('loading');
-            container.classList.add('error');
+      <script>
+        async function loadRoot() {
+          const container = document.getElementById('tree-container');
+          const loadingLabel = document.getElementById('tree-loading-label');
+          container.classList.add('text-slate-500', 'italic');
+          container.textContent = 'Loading snapshot contents...';
+          try {
+            const response = await fetch('{{ url_for("snapshot_tree_root_api", snapshot_id=snapshot_id) }}');
+            if (!response.ok) {
+              container.classList.remove('italic');
+              container.classList.add('text-red-600');
+              container.textContent = 'Error loading snapshot contents.';
+              if (loadingLabel) loadingLabel.textContent = 'Error';
+              return;
+            }
+            const data = await response.json();
+            container.classList.remove('italic');
+            container.classList.remove('text-slate-500');
+            container.innerHTML = buildNodeListHtml(data.entries, '');
+            if (loadingLabel) loadingLabel.textContent = 'Loaded';
+          } catch (e) {
+            container.classList.remove('italic');
+            container.classList.add('text-red-600');
             container.textContent = 'Error loading snapshot contents.';
+            if (loadingLabel) loadingLabel.textContent = 'Error';
+          }
+        }
+
+        function escapeHtml(text) {
+          const map = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+          };
+          return text.replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
+        function buildNodeListHtml(entries, prefix) {
+          // entries: [{name, path, type}]
+          let html = '<ul class="space-y-0.5">';
+          for (const entry of entries) {
+            const fullPath = entry.path;
+            const safeId = escapeHtml(fullPath).replace(/[^a-zA-Z0-9_-]/g, '_');
+            const safeLabel = escapeHtml(entry.name);
+            const checkbox =
+              '<input type="checkbox" class="mr-1 align-middle rounded border-slate-300 text-sky-600 focus:ring-sky-500" ' +
+              'name="selected_paths" value="' + escapeHtml(fullPath) + '" id="' + safeId + '">';
+            const label =
+              '<label for="' + safeId + '" class="cursor-pointer align-middle text-slate-800">' +
+              safeLabel + '</label>';
+
+            if (entry.type === 'dir') {
+              html += '<li class="flex flex-col">';
+              html += '<div class="flex items-center gap-1">';
+              html += checkbox + label;
+              html += '<span class="caret text-[10px]" data-path="' + escapeHtml(fullPath) + '" data-loaded="false" onclick="onCaretClick(this)"></span>';
+              html += '</div>';
+              html += '<div class="nested ml-4 mt-0.5" style="display:none;"></div>';
+              html += '</li>';
+            } else {
+              html += '<li class="flex items-center gap-1">';
+              html += checkbox + label;
+              html += '</li>';
+            }
+          }
+          html += '</ul>';
+          return html;
+        }
+
+        async function onCaretClick(element) {
+          const nested = element.nextElementSibling;
+          const path = element.getAttribute('data-path');
+          const loaded = element.getAttribute('data-loaded') === 'true';
+
+          if (nested.style.display === 'none') {
+            nested.style.display = 'block';
+            element.classList.add('caret-down');
+          } else if (loaded) {
+            nested.style.display = 'none';
+            element.classList.remove('caret-down');
             return;
           }
-          const data = await response.json();
-          container.classList.remove('loading');
-          container.innerHTML = buildNodeListHtml(data.entries, '');
-        } catch (e) {
-          container.classList.remove('loading');
-          container.classList.add('error');
-          container.textContent = 'Error loading snapshot contents.';
-        }
-      }
 
-      function escapeHtml(text) {
-        const map = {
-          '&': '&amp;',
-          '<': '&lt;',
-          '>': '&gt;',
-          '"': '&quot;',
-          "'": '&#039;'
-        };
-        return text.replace(/[&<>"']/g, function(m) { return map[m]; });
-      }
-
-      function buildNodeListHtml(entries, prefix) {
-        // entries: [{name, path, type}]
-        let html = '<ul style="list-style-type:none; padding-left: 1em;">';
-        for (const entry of entries) {
-          const fullPath = entry.path;
-          const safeId = escapeHtml(fullPath).replace(/[^a-zA-Z0-9_-]/g, '_');
-          const safeLabel = escapeHtml(entry.name);
-          const checkbox = '<input type="checkbox" name="selected_paths" value="' + escapeHtml(fullPath) + '" id="' + safeId + '">';
-          const label = '<label for="' + safeId + '">' + safeLabel + '</label>';
-
-          if (entry.type === 'dir') {
-            // Directory: has caret and a nested container that will be filled lazily
-            html += '<li>'
-              + checkbox + label + ' '
-              + '<span class="caret" data-path="' + escapeHtml(fullPath) + '" data-loaded="false" onclick="onCaretClick(this)"></span>'
-              + '<div class="nested" style="display:none;"></div>'
-              + '</li>';
-          } else {
-            // File: just checkbox + label
-            html += '<li>' + checkbox + label + '</li>';
-          }
-        }
-        html += '</ul>';
-        return html;
-      }
-
-      async function onCaretClick(element) {
-        const nested = element.nextElementSibling;
-        const path = element.getAttribute('data-path');
-        const loaded = element.getAttribute('data-loaded') === 'true';
-
-        // Toggle visibility
-        if (nested.style.display === 'none') {
-          nested.style.display = 'block';
-          element.classList.add('caret-down');
-        } else if (loaded) {
-          // If already loaded, just hide/show
-          nested.style.display = 'none';
-          element.classList.remove('caret-down');
-          return;
-        }
-
-        if (loaded) {
-          // Already loaded and we just showed it above
-          return;
-        }
-
-        // Not loaded yet: fetch children
-        nested.innerHTML = '<span class="loading">Loading...</span>';
-        try {
-          const url = new URL('{{ url_for("snapshot_tree_node_api", snapshot_id=snapshot_id) }}', window.location.origin);
-          url.searchParams.set('path', path);
-          const response = await fetch(url.toString());
-          if (!response.ok) {
-            nested.innerHTML = '<span class="error">Error loading directory.</span>';
+          if (loaded) {
             return;
           }
-          const data = await response.json();
-          nested.innerHTML = buildNodeListHtml(data.entries, path);
-          element.setAttribute('data-loaded', 'true');
-        } catch (e) {
-          nested.innerHTML = '<span class="error">Error loading directory.</span>';
-        }
-      }
 
-      function confirmRestore() {
-        const checked = document.querySelectorAll('input[name="selected_paths"]:checked');
-        if (checked.length === 0) {
-          alert("Please select at least one path to restore.");
-          return false;
-        }
-        const path = document.getElementById("restore_path").value.trim();
-        if (!path) {
-          alert("Please enter a restore path.");
-          return false;
+          nested.innerHTML = '<span class="text-slate-500 italic text-[11px]">Loading...</span>';
+          try {
+            const url = new URL('{{ url_for("snapshot_tree_node_api", snapshot_id=snapshot_id) }}', window.location.origin);
+            url.searchParams.set('path', path);
+            const response = await fetch(url.toString());
+            if (!response.ok) {
+              nested.innerHTML = '<span class="text-red-600 text-[11px]">Error loading directory.</span>';
+              return;
+            }
+            const data = await response.json();
+            nested.innerHTML = buildNodeListHtml(data.entries, path);
+            element.setAttribute('data-loaded', 'true');
+          } catch (e) {
+            nested.innerHTML = '<span class="text-red-600 text-[11px]">Error loading directory.</span>';
+          }
         }
 
-        // Show "Restore in progress" immediately
-        const statusEl = document.getElementById("restore-status");
-        if (statusEl) {
-          statusEl.textContent = "Restore in progress";
+        function confirmRestore() {
+          const checked = document.querySelectorAll('input[name="selected_paths"]:checked');
+          if (checked.length === 0) {
+            alert("Please select at least one path to restore.");
+            return false;
+          }
+          const path = document.getElementById("restore_path").value.trim();
+          if (!path) {
+            alert("Please enter a restore path.");
+            return false;
+          }
+
+          const statusEl = document.getElementById("restore-status");
+          if (statusEl) {
+            statusEl.innerHTML = '<span class="text-sky-700 font-medium">Restore in progress</span>';
+          }
+
+          return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
         }
 
-        return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
-      }
-
-      document.addEventListener('DOMContentLoaded', loadRoot);
-    </script>
+        document.addEventListener('DOMContentLoaded', loadRoot);
+      </script>
+    </body>
+    </html>
     """
     return render_template_string(template, snapshot_id=snapshot_id, restore_status=restore_status)
 
