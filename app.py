@@ -21,16 +21,30 @@ def default_route():
     """
     return render_template_string(template, snapshots=snapshots)
 
-@app.route("/snapshot/<snapshot_id>")
+from flask import request, redirect, url_for
+import subprocess
+
+@app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
     restic = ResticUI()
+
+    if request.method == "POST":
+        selected_paths = request.form.getlist("selected_paths")
+        restore_path = request.form.get("restore_path", "").strip()
+        if selected_paths and restore_path:
+            for path in selected_paths:
+                subprocess.run([
+                    "restic", "restore", snapshot_id,
+                    "--target", restore_path,
+                    "--include", path
+                ])
+            return redirect(url_for("snapshot_detail", snapshot_id=snapshot_id))
+
     contents = restic.get_snapshot_contents(snapshot_id)
 
-    # Build a tree structure from the flat list of paths
     tree = {}
     for line in contents:
         parts = line.strip().split()
-        # The last part is the path, e.g. "path/to/file"
         path = parts[-1] if parts else ""
         if not path:
             continue
@@ -39,18 +53,26 @@ def snapshot_detail(snapshot_id):
         for segment in segments:
             current = current.setdefault(segment, {})
 
-    def render_tree(d, level=0):
+    def render_tree(d, prefix=""):
         html = '<ul style="list-style-type:none; padding-left: 1em;">'
         for key, subtree in sorted(d.items()):
+            full_path = f"{prefix}/{key}" if prefix else key
             if subtree:
                 html += (
                     f'<li>'
-                    f'<span class="caret" onclick="toggleNested(this)">{key}</span>'
-                    f'<div class="nested" style="display:none;">{render_tree(subtree, level+1)}</div>'
+                    f'<input type="checkbox" name="selected_paths" value="{full_path}" id="{full_path}">'
+                    f'<label for="{full_path}">{key}</label> '
+                    f'<span class="caret" onclick="toggleNested(this)"></span>'
+                    f'<div class="nested" style="display:none;">{render_tree(subtree, full_path)}</div>'
                     f'</li>'
                 )
             else:
-                html += f'<li>{key}</li>'
+                html += (
+                    f'<li>'
+                    f'<input type="checkbox" name="selected_paths" value="{full_path}" id="{full_path}">'
+                    f'<label for="{full_path}">{key}</label>'
+                    f'</li>'
+                )
         html += "</ul>"
         return html
 
@@ -62,12 +84,13 @@ def snapshot_detail(snapshot_id):
       .caret {
         cursor: pointer;
         user-select: none;
+        display: inline-block;
+        margin-left: 6px;
+        color: black;
       }
       .caret::before {
         content: "\\25B6"; /* right-pointing triangle */
-        color: black;
         display: inline-block;
-        margin-right: 6px;
         transform: rotate(0deg);
         transition: transform 0.3s ease;
       }
@@ -77,9 +100,22 @@ def snapshot_detail(snapshot_id):
       .nested {
         margin-left: 1em;
       }
+      form {
+        margin-top: 1em;
+      }
+      label {
+        cursor: pointer;
+      }
     </style>
     {% if tree_html %}
-      {{ tree_html|safe }}
+      <form method="post" onsubmit="return confirmRestore()">
+        {{ tree_html|safe }}
+        <p>
+          <label for="restore_path">Restore Path:</label>
+          <input type="text" id="restore_path" name="restore_path" required placeholder="/path/to/restore">
+        </p>
+        <button type="submit">Restore Selected</button>
+      </form>
     {% else %}
       <p>No contents found or error retrieving snapshot.</p>
     {% endif %}
@@ -93,6 +129,19 @@ def snapshot_detail(snapshot_id):
         } else {
           nested.style.display = "none";
         }
+      }
+      function confirmRestore() {
+        const checked = document.querySelectorAll('input[name="selected_paths"]:checked');
+        if (checked.length === 0) {
+          alert("Please select at least one path to restore.");
+          return false;
+        }
+        const path = document.getElementById("restore_path").value.trim();
+        if (!path) {
+          alert("Please enter a restore path.");
+          return false;
+        }
+        return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
       }
     </script>
     """
