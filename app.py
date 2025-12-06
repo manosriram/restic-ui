@@ -1,5 +1,6 @@
 import time
-from flask import Flask, render_template_string
+import subprocess
+from flask import Flask, render_template_string, request, redirect, url_for, jsonify
 
 from restic import ResticUI
 
@@ -27,9 +28,6 @@ def default_route():
     """
     return render_template_string(template, snapshots=snapshots)
 
-from flask import request, redirect, url_for
-import subprocess
-
 @app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
     restic = ResticUI()
@@ -46,47 +44,7 @@ def snapshot_detail(snapshot_id):
                 ])
             return redirect(url_for("snapshot_detail", snapshot_id=snapshot_id))
 
-    contents = restic.get_snapshot_contents(snapshot_id)
-
-    tree = {}
-    for line in contents:
-        parts = line.strip().split()
-        path = parts[-1] if parts else ""
-        if not path:
-            continue
-        # Skip very deep paths to avoid huge trees causing hangs
-        segments = path.split('/')
-        if len(segments) > 20:
-            continue
-        current = tree
-        for segment in segments:
-            current = current.setdefault(segment, {})
-
-    def render_tree(d, prefix=""):
-        html = '<ul style="list-style-type:none; padding-left: 1em;">'
-        for key, subtree in sorted(d.items()):
-            full_path = f"{prefix}/{key}" if prefix else key
-            if subtree:
-                html += (
-                    f'<li>'
-                    f'<input type="checkbox" name="selected_paths" value="{full_path}" id="{full_path}">'
-                    f'<label for="{full_path}">{key}</label> '
-                    f'<span class="caret" onclick="toggleNested(this)"></span>'
-                    f'<div class="nested" style="display:none;">{render_tree(subtree, full_path)}</div>'
-                    f'</li>'
-                )
-            else:
-                html += (
-                    f'<li>'
-                    f'<input type="checkbox" name="selected_paths" value="{full_path}" id="{full_path}">'
-                    f'<label for="{full_path}">{key}</label>'
-                    f'</li>'
-                )
-        html += "</ul>"
-        return html
-
-    tree_html = render_tree(tree)
-
+    # Initial page render: we don't build the whole tree here anymore
     template = """
     <h1>Snapshot {{ snapshot_id }} Contents</h1>
     <style>
@@ -116,20 +74,62 @@ def snapshot_detail(snapshot_id):
         cursor: pointer;
       }
     </style>
-    {% if tree_html %}
-      <form method="post" onsubmit="return confirmRestore()">
-        {{ tree_html|safe }}
-        <p>
-          <label for="restore_path">Restore Path:</label>
-          <input type="text" id="restore_path" name="restore_path" required placeholder="/path/to/restore">
-        </p>
-        <button type="submit">Restore Selected</button>
-      </form>
-    {% else %}
-      <p>No contents found or error retrieving snapshot.</p>
-    {% endif %}
+
+    <form id="restore-form" method="post" onsubmit="return confirmRestore()">
+      <div id="tree-container">
+        Loading snapshot contents...
+      </div>
+      <p>
+        <label for="restore_path">Restore Path:</label>
+        <input type="text" id="restore_path" name="restore_path" required placeholder="/path/to/restore">
+      </p>
+      <button type="submit">Restore Selected</button>
+    </form>
+
     <p><a href="/">Back to snapshots</a></p>
+
     <script>
+      async function loadTree() {
+        const container = document.getElementById('tree-container');
+        try {
+          const response = await fetch('{{ url_for("snapshot_tree_api", snapshot_id=snapshot_id) }}');
+          if (!response.ok) {
+            container.textContent = 'Error loading snapshot contents.';
+            return;
+          }
+          const data = await response.json();
+          container.innerHTML = buildTreeHtml(data.tree, '');
+        } catch (e) {
+          container.textContent = 'Error loading snapshot contents.';
+        }
+      }
+
+      function buildTreeHtml(node, prefix) {
+        let html = '<ul style="list-style-type:none; padding-left: 1em;">';
+        const keys = Object.keys(node).sort();
+        for (const key of keys) {
+          const subtree = node[key];
+          const fullPath = prefix ? (prefix + '/' + key) : key;
+          if (Object.keys(subtree).length > 0) {
+            html += '<li>'
+              + '<input type="checkbox" name="selected_paths" value="' + fullPath + '" id="' + fullPath + '">'
+              + '<label for="' + fullPath + '">' + key + '</label> '
+              + '<span class="caret" onclick="toggleNested(this)"></span>'
+              + '<div class="nested" style="display:none;">'
+              + buildTreeHtml(subtree, fullPath)
+              + '</div>'
+              + '</li>';
+          } else {
+            html += '<li>'
+              + '<input type="checkbox" name="selected_paths" value="' + fullPath + '" id="' + fullPath + '">'
+              + '<label for="' + fullPath + '">' + key + '</label>'
+              + '</li>';
+          }
+        }
+        html += '</ul>';
+        return html;
+      }
+
       function toggleNested(element) {
         element.classList.toggle("caret-down");
         var nested = element.nextElementSibling;
@@ -139,6 +139,7 @@ def snapshot_detail(snapshot_id):
           nested.style.display = "none";
         }
       }
+
       function confirmRestore() {
         const checked = document.querySelectorAll('input[name="selected_paths"]:checked');
         if (checked.length === 0) {
@@ -152,9 +153,43 @@ def snapshot_detail(snapshot_id):
         }
         return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
       }
+
+      document.addEventListener('DOMContentLoaded', loadTree);
     </script>
     """
-    return render_template_string(template, snapshot_id=snapshot_id, tree_html=tree_html)
+    return render_template_string(template, snapshot_id=snapshot_id)
+
+@app.route("/api/snapshot/<snapshot_id>/tree")
+def snapshot_tree_api(snapshot_id):
+    """
+    Lightweight API endpoint that returns a pruned directory tree for the snapshot.
+    This avoids rendering the whole tree in the main request and lets the browser
+    handle the JSON asynchronously.
+    """
+    restic = ResticUI()
+    contents = restic.get_snapshot_contents(snapshot_id)
+
+    tree = {}
+    max_depth = 10  # keep depth reasonable to avoid huge trees
+    max_entries = 5000  # hard cap on number of paths processed
+
+    count = 0
+    for line in contents:
+        if count >= max_entries:
+            break
+        parts = line.strip().split()
+        path = parts[-1] if parts else ""
+        if not path:
+            continue
+        segments = path.split('/')
+        if len(segments) > max_depth:
+            segments = segments[:max_depth] + ['…']
+        current = tree
+        for segment in segments:
+            current = current.setdefault(segment, {})
+        count += 1
+
+    return jsonify({"tree": tree, "truncated": count >= max_entries})
 
 if __name__ == "__main__":
     app.run(host="100.69.69.69")
