@@ -6,7 +6,6 @@ class ResticUI:
         pass
 
     def get_snapshots(self):
-        """Use local restic CLI to get snapshots and return as dict"""
         try:
             result = subprocess.run(
                 ["restic", "snapshots", "--json"],
@@ -14,8 +13,19 @@ class ResticUI:
                 text=True,
                 check=True
             )
-            snapshots = json.loads(result.stdout)
-            return snapshots
-        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
-            # You might want to handle/log the error properly in real use
-            return {}
+            return json.loads(result.stdout)
+        except (subprocess.CalledProcessError, json.JSONDecodeError):
+            return []
+
+    def get_snapshot_contents(self, snapshot_id):
+        try:
+            result = subprocess.run(
+                ["restic", "ls", snapshot_id],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            # Return list of lines as contents
+            return result.stdout.strip().splitlines()
+        except subprocess.CalledProcessError:
+            return []
