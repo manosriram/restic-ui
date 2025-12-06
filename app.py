@@ -44,6 +44,13 @@ def default_route():
         else:
             snap["_human_time"] = snap.get("time", "")
 
+        # Normalize tags for display (restic uses "tags": ["a","b"] or may omit)
+        tags = snap.get("tags") or []
+        if isinstance(tags, list):
+            snap["_tags_display"] = ", ".join(tags)
+        else:
+            snap["_tags_display"] = str(tags)
+
     snapshots.sort(key=lambda s: s.get("_parsed_time") or datetime.min, reverse=True)
 
     template = """
@@ -54,6 +61,16 @@ def default_route():
       <title>Restic Snapshots</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <link rel="stylesheet" href="https://unpkg.com/terminal.css@0.7.4/dist/terminal.min.css" />
+      <style>
+        /* Make the table a bit wider and allow horizontal scrolling if needed */
+        .snapshots-wrapper {
+          max-width: 100%;
+          overflow-x: auto;
+        }
+        .snapshots-table {
+          min-width: 70rem; /* increase logical width of the table */
+        }
+      </style>
     </head>
     <body class="terminal">
       <div class="container">
@@ -78,26 +95,30 @@ def default_route():
             </header>
 
             {% if snapshots %}
-              <table>
-                <thead>
-                  <tr>
-                    <th>ID</th>
-                    <th>Time</th>
-                    <th>Host</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for snap in snapshots %}
+              <div class="snapshots-wrapper">
+                <table class="snapshots-table">
+                  <thead>
                     <tr>
-                      <td>
-                        <a href="/snapshot/{{ snap.id }}">{{ snap.id }}</a>
-                      </td>
-                      <td>{{ snap._human_time }}</td>
-                      <td>{{ snap.hostname }}</td>
+                      <th>ID</th>
+                      <th>Time</th>
+                      <th>Host</th>
+                      <th>Tags</th>
                     </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {% for snap in snapshots %}
+                      <tr>
+                        <td>
+                          <a href="/snapshot/{{ snap.id }}">{{ snap.id }}</a>
+                        </td>
+                        <td>{{ snap._human_time }}</td>
+                        <td>{{ snap.hostname }}</td>
+                        <td>{{ snap._tags_display }}</td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </div>
             {% else %}
               <div class="terminal-alert">
                 No snapshots found.
