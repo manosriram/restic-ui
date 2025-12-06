@@ -394,6 +394,7 @@ def snapshot_detail(snapshot_id):
           font-size: 0.9rem;
           white-space: pre-wrap;
           background-color: #111;
+          color: white;
         }
         .restore-log-box.hidden {
           display: none;
