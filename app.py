@@ -2,6 +2,7 @@ import time
 import subprocess
 import tempfile
 import os
+from datetime import datetime
 from flask import Flask, render_template_string, request, redirect, url_for, jsonify, abort
 
 from restic import ResticUI
@@ -17,13 +18,44 @@ def default_route():
     if not hasattr(restic, "_cached_snapshots") or (restic._cache_time + 10) < time.time():
         restic._cached_snapshots = restic.get_snapshots()
         restic._cache_time = time.time()
-    snapshots = restic._cached_snapshots
+    snapshots = restic._cached_snapshots or []
+
+    # Sort snapshots by time descending and format timestamp
+    def parse_time(s):
+        # restic uses RFC3339, e.g. "2023-09-01T12:34:56.123456789Z"
+        # We strip sub-second precision and trailing Z for parsing.
+        if not s:
+            return None
+        t = s
+        if t.endswith("Z"):
+            t = t[:-1]
+        if "." in t:
+            t = t.split(".", 1)[0]
+        try:
+            return datetime.strptime(t, "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            return None
+
+    for snap in snapshots:
+        dt = parse_time(snap.get("time"))
+        snap["_parsed_time"] = dt
+        if dt is not None:
+            snap["_human_time"] = dt.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            snap["_human_time"] = snap.get("time", "")
+
+    snapshots.sort(key=lambda s: s.get("_parsed_time") or datetime.min, reverse=True)
+
     template = """
     <h1>Restic Snapshots</h1>
     {% if snapshots %}
     <ul>
     {% for snap in snapshots %}
-      <li><a href="/snapshot/{{ snap.id }}">{{ snap.id }}</a> - {{ snap.time }} - {{ snap.hostname }}</li>
+      <li>
+        <a href="/snapshot/{{ snap.id }}">{{ snap.id }}</a>
+        - {{ snap._human_time }}
+        - {{ snap.hostname }}
+      </li>
     {% endfor %}
     </ul>
     {% else %}
