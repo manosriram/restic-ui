@@ -54,7 +54,10 @@ def snapshot_detail(snapshot_id):
         path = parts[-1] if parts else ""
         if not path:
             continue
+        # Skip very deep paths to avoid huge trees causing hangs
         segments = path.split('/')
+        if len(segments) > 20:
+            continue
         current = tree
         for segment in segments:
             current = current.setdefault(segment, {})
