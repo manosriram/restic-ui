@@ -28,12 +28,6 @@ COPY . .
 ENV PYTHONUNBUFFERED=1
 ENV FLASK_ENV=production
 ENV FLASK_APP=app.py
-# Default restic repo location inside container; can be overridden
-# ENV RESTIC_REPOSITORY=s3:s3.eu-central-003.backblazeb2.com/mano-homelab-backup
-# ENV RESTIC_PASSWORD_FILE=/etc/restic-password
-
-# Create directory for restic repository (can be backed by a volume)
-# RUN mkdir -p /data/repo
 
 # Expose the port the app listens on
 EXPOSE 8000

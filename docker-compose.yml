@@ -11,4 +11,5 @@ services:
     volumes:
       - /etc/restic-password:/etc/restic-password
       - /usr/bin/restic:/usr/bin/restic
+      - /fs/containers:/fs/containers
     restart: unless-stopped
