@@ -193,7 +193,7 @@ def snapshot_detail(snapshot_id):
 
     # Initial page render or after POST: we don't build the whole tree here anymore
     template = """
-    <h1>Snapshot {{ snapshot_id }} Contents</h1>
+    <h1>Snapshot {{ snapshot_id }}</h1>
     <style>
       .caret {
         cursor: pointer;
