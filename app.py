@@ -122,18 +122,20 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
 
 @app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
+    restore_status = None
+
     if request.method == "POST":
         selected_paths = request.form.getlist("selected_paths")
         restore_path = request.form.get("restore_path", "").strip()
         if selected_paths and restore_path:
             try:
                 _run_restore(snapshot_id, restore_path, selected_paths)
+                restore_status = "completed"
             except Exception as e:
-                # For now we just log and redirect; you could render an error page instead
                 app.logger.error("Restore error for snapshot %s: %s", snapshot_id, e)
-            return redirect(url_for("snapshot_detail", snapshot_id=snapshot_id))
+                restore_status = "error"
 
-    # Initial page render: we don't build the whole tree here anymore
+    # Initial page render or after POST: we don't build the whole tree here anymore
     template = """
     <h1>Snapshot {{ snapshot_id }} Contents</h1>
     <style>
@@ -169,6 +171,10 @@ def snapshot_detail(snapshot_id):
       .error {
         color: red;
       }
+      #restore-status {
+        margin-top: 0.5em;
+        font-style: italic;
+      }
     </style>
 
     <form id="restore-form" method="post" onsubmit="return confirmRestore()">
@@ -180,6 +186,13 @@ def snapshot_detail(snapshot_id):
         <input type="text" id="restore_path" name="restore_path" required placeholder="/path/to/restore">
       </p>
       <button type="submit">Restore Selected</button>
+      <div id="restore-status">
+        {% if restore_status == 'completed' %}
+          Restore completed
+        {% elif restore_status == 'error' %}
+          Restore failed
+        {% endif %}
+      </div>
     </form>
 
     <p><a href="/">Back to snapshots</a></p>
@@ -294,80 +307,20 @@ def snapshot_detail(snapshot_id):
           alert("Please enter a restore path.");
           return false;
         }
+
+        // Show "Restore in progress" immediately
+        const statusEl = document.getElementById("restore-status");
+        if (statusEl) {
+          statusEl.textContent = "Restore in progress";
+        }
+
         return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
       }
 
       document.addEventListener('DOMContentLoaded', loadRoot);
     </script>
     """
-    return render_template_string(template, snapshot_id=snapshot_id)
-
-def _list_children(entries, parent_path):
-    """
-    Given a list of restic entries (dicts with 'path' and 'type') and a parent
-    path ('' for root), return a list of direct children entries:
-      [{ "name": <str>, "path": <str>, "type": "file"|"dir" }]
-    """
-    children = {}
-    # Normalise parent path: '' (root) or 'dir/subdir'
-    prefix = parent_path.strip('/')
-    if prefix:
-        prefix = prefix + '/'
-    else:
-        prefix = ''
-
-    for e in entries:
-        path = e.get("path", "").lstrip("/")
-        if not path.startswith(prefix):
-            continue
-
-        rest = path[len(prefix):]
-        if not rest:
-            continue
-
-        # Only direct children: split once
-        parts = rest.split('/', 1)
-        name = parts[0]
-        is_dir = len(parts) > 1 or e.get("type") == "dir"
-        child_path = (prefix + name).rstrip('/')
-
-        existing = children.get(name)
-        if existing:
-            # Upgrade to dir if any entry indicates it's a dir
-            if is_dir and existing["type"] == "file":
-                existing["type"] = "dir"
-            continue
-
-        children[name] = {
-            "name": name,
-            "path": child_path,
-            "type": "dir" if is_dir else "file",
-        }
-
-    return [children[name] for name in sorted(children.keys())]
-
-@app.route("/api/snapshot/<snapshot_id>/tree/root")
-def snapshot_tree_root_api(snapshot_id):
-    """
-    Return the top-level entries of the snapshot (lazy root).
-    """
-    entries = restic.get_snapshot_contents(snapshot_id)
-    children = _list_children(entries, parent_path="")
-    return jsonify({"entries": children})
-
-@app.route("/api/snapshot/<snapshot_id>/tree/node")
-def snapshot_tree_node_api(snapshot_id):
-    """
-    Return the direct children of a given directory path within the snapshot.
-    Query param: ?path=<dir_path>
-    """
-    parent_path = request.args.get("path", "", type=str)
-    if parent_path is None:
-        abort(400, description="Missing 'path' parameter")
-
-    entries = restic.get_snapshot_contents(snapshot_id)
-    children = _list_children(entries, parent_path=parent_path)
-    return jsonify({"entries": children})
+    return render_template_string(template, snapshot_id=snapshot_id, restore_status=restore_status)
 
 if __name__ == "__main__":
     app.run(host="100.69.69.69")
