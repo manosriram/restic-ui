@@ -2,8 +2,11 @@ import time
 import subprocess
 import tempfile
 import os
+import threading
+import json
 from datetime import datetime
 from math import ceil
+from pathlib import Path
 from flask import Flask, render_template_string, request, jsonify, abort, url_for
 
 from restic import ResticUI
@@ -14,6 +17,11 @@ app = Flask(__name__)
 restic = ResticUI()
 
 SNAPSHOTS_PER_PAGE = 20
+
+# Directory on the host where restore logs will be written
+LOG_DIR = Path("/fs/containers/restic-ui/logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 
 @app.route("/")
 def default_route():
@@ -189,84 +197,85 @@ def default_route():
     )
 
 
-def _run_restore(snapshot_id, restore_path, selected_paths):
+def _run_restore(snapshot_id, restore_path, selected_paths, log_path: Path, status_path: Path):
     """
     Run a single restic restore command for all selected paths.
 
     - For a small number of paths, use multiple --include flags.
     - For many paths, write them to a temporary file and use --files-from.
 
-    Returns combined logs as a string.
+    Logs are written directly to log_path, and status_path is updated with:
+      - "running" at start
+      - "success" on success
+      - "error" on failure
     """
-    # Basic sanity checks; you can tighten these as needed
     restore_path = restore_path.strip()
     if not restore_path:
         raise ValueError("Empty restore_path")
 
-    # Threshold for switching to --files-from
     FILES_FROM_THRESHOLD = 100
 
     if len(selected_paths) == 0:
         raise ValueError("No paths selected for restore")
 
-    def _run_and_collect_logs(cmd, context):
+    # Mark as running
+    try:
+        status_path.write_text("running", encoding="utf-8")
+    except Exception:
+        app.logger.warning("Failed to write running status to %s", status_path)
+
+    def _run_and_log(cmd, context):
         app.logger.info("Running restore command%s: %s", context, " ".join(cmd))
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        logs = ""
-        if result.stdout:
-            logs += result.stdout
-        if result.stderr:
-            if logs:
-                logs += "\n"
-            logs += result.stderr
-        if result.returncode != 0:
-            app.logger.error("restic restore failed%s: %s", context, result.stderr)
-            return logs, False
-        return logs, True
+        with open(log_path, "ab", buffering=0) as log_file:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
+            returncode = proc.wait()
+        if returncode != 0:
+            app.logger.error("restic restore failed%s with code %s", context, returncode)
+            return False
+        return True
 
-    logs = ""
     success = False
+    tmp_path = None
 
-    if len(selected_paths) <= FILES_FROM_THRESHOLD:
-        # Use multiple --include flags
-        cmd = ["/usr/bin/restic", "restore", snapshot_id, "--target", restore_path]
-        for path in selected_paths:
-            # Paths come from our own UI, but still strip whitespace
-            cmd.extend(["--include", path.strip()])
-        logs, success = _run_and_collect_logs(cmd, " (includes)")
-    else:
-        # Many paths: use --files-from
-        tmp_path = None
+    try:
+        if len(selected_paths) <= FILES_FROM_THRESHOLD:
+            cmd = ["/usr/bin/restic", "restore", snapshot_id, "--target", restore_path]
+            for path in selected_paths:
+                cmd.extend(["--include", path.strip()])
+            success = _run_and_log(cmd, " (includes)")
+        else:
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+                    tmp_path = f.name
+                    for p in selected_paths:
+                        f.write(p.strip() + "\n")
+                cmd = [
+                    "/usr/bin/restic",
+                    "restore",
+                    snapshot_id,
+                    "--target",
+                    restore_path,
+                    "--files-from",
+                    tmp_path,
+                ]
+                success = _run_and_log(cmd, " (files-from)")
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        app.logger.warning(
+                            "Failed to remove temporary files-from list: %s", tmp_path
+                        )
+    finally:
         try:
-            with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
-                tmp_path = f.name
-                for p in selected_paths:
-                    f.write(p.strip() + "\n")
-
-            cmd = [
-                "/usr/bin/restic",
-                "restore",
-                snapshot_id,
-                "--target",
-                restore_path,
-                "--files-from",
-                tmp_path,
-            ]
-            logs, success = _run_and_collect_logs(cmd, " (files-from)")
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except OSError:
-                    app.logger.warning(
-                        "Failed to remove temporary files-from list: %s", tmp_path
-                    )
-
-    if not success:
-        # Raise so the caller can set restore_status = "error"
-        raise RuntimeError(f"restic restore failed. See logs for details.\n{logs}")
-
-    return logs
+            status_path.write_text("success" if success else "error", encoding="utf-8")
+        except Exception:
+            app.logger.warning("Failed to write final status to %s", status_path)
 
 
 def _build_tree(entries):
@@ -332,25 +341,77 @@ def snapshot_tree_node_api(snapshot_id):
     return jsonify({"entries": children})
 
 
+@app.route("/api/restore/<job_id>/logs")
+def restore_logs_api(job_id):
+    """
+    Return current logs and status for a given restore job.
+
+    Response JSON:
+      {
+        "logs": "<full log file contents or empty string>",
+        "status": "pending" | "running" | "success" | "error"
+      }
+    """
+    # Basic sanity: avoid path traversal
+    if "/" in job_id or ".." in job_id:
+        abort(400)
+
+    log_path = LOG_DIR / f"{job_id}.log"
+    status_path = LOG_DIR / f"{job_id}.status"
+
+    logs = ""
+    status = "pending"
+
+    if log_path.exists():
+        try:
+            logs = log_path.read_text(encoding="utf-8", errors="replace")
+        except Exception as e:
+            app.logger.warning("Failed to read log file %s: %s", log_path, e)
+
+    if status_path.exists():
+        try:
+            status = status_path.read_text(encoding="utf-8", errors="replace").strip() or "pending"
+        except Exception as e:
+            app.logger.warning("Failed to read status file %s: %s", status_path, e)
+
+    return jsonify({"logs": logs, "status": status})
+
+
 @app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
     restore_status = None
     restore_logs = ""
+    job_id = None
 
     if request.method == "POST":
         selected_paths = request.form.getlist("selected_paths")
         restore_path = request.form.get("restore_path", "").strip()
         if selected_paths and restore_path:
+            # Create a simple job id
+            job_id = f"{snapshot_id}-{int(time.time())}"
+            log_path = LOG_DIR / f"{job_id}.log"
+            status_path = LOG_DIR / f"{job_id}.status"
+
+            # Ensure empty log file and initial status
             try:
-                restore_logs = _run_restore(snapshot_id, restore_path, selected_paths)
-                restore_status = "completed"
+                log_path.write_text("", encoding="utf-8")
             except Exception as e:
-                app.logger.error(
-                    "Restore error for snapshot %s: %s", snapshot_id, e
-                )
-                restore_status = "error"
-                # If the exception message contains logs, surface them
-                restore_logs = str(e)
+                app.logger.error("Failed to create log file %s: %s", log_path, e)
+            try:
+                status_path.write_text("pending", encoding="utf-8")
+            except Exception as e:
+                app.logger.error("Failed to create status file %s: %s", status_path, e)
+
+            # Start background thread to run restore
+            thread = threading.Thread(
+                target=_run_restore,
+                args=(snapshot_id, restore_path, selected_paths, log_path, status_path),
+                daemon=True,
+            )
+            thread.start()
+
+            restore_status = "started"
+            restore_logs = "Restore started. Logs will appear below."
 
     template = """
     <!doctype html>
@@ -429,7 +490,7 @@ def snapshot_detail(snapshot_id):
               </p>
             </header>
 
-            <form id="restore-form" method="post" onsubmit="return confirmRestore()">
+            <form id="restore-form" method="post" onsubmit="return onRestoreSubmit(event)">
               <fieldset>
                 <legend>Restore options</legend>
 
@@ -455,13 +516,9 @@ def snapshot_detail(snapshot_id):
 
                 <div style="margin-top: 0.5rem;">
                   <div id="restore-status">
-                    {% if restore_status == 'completed' %}
-                      <div class="terminal-alert terminal-alert-primary terminal-alert-success">
-                        Restore completed
-                      </div>
-                    {% elif restore_status == 'error' %}
-                      <div class="terminal-alert terminal-alert-error">
-                        Restore failed
+                    {% if restore_status == 'started' %}
+                      <div class="terminal-alert terminal-alert-primary">
+                        Restore started
                       </div>
                     {% endif %}
                   </div>
@@ -578,7 +635,7 @@ def snapshot_detail(snapshot_id):
           }
         }
 
-        function confirmRestore() {
+        function confirmSelectionAndPath() {
           const checked = document.querySelectorAll('input[name="selected_paths"]:checked');
           if (checked.length === 0) {
             alert("Please select at least one path to restore.");
@@ -589,6 +646,61 @@ def snapshot_detail(snapshot_id):
             alert("Please enter a restore path.");
             return false;
           }
+          return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
+        }
+
+        async function onRestoreSubmit(event) {
+          event.preventDefault();
+          if (!confirmSelectionAndPath()) {
+            return false;
+          }
+
+          const form = document.getElementById('restore-form');
+          const formData = new FormData(form);
+
+          const statusEl = document.getElementById("restore-status");
+          const logEl = document.getElementById("restore-log");
+          if (statusEl) {
+            statusEl.innerHTML =
+              '<div class="terminal-alert terminal-alert-primary">Restore starting...</div>';
+          }
+          if (logEl) {
+            logEl.classList.remove('hidden');
+            logEl.textContent = 'Starting restic restore...';
+          }
+
+          try {
+            const response = await fetch(window.location.href, {
+              method: 'POST',
+              body: formData,
+            });
+            const text = await response.text();
+
+            // Parse the returned HTML to extract job_id if present
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(text, 'text/html');
+            const jobMeta = doc.querySelector('meta[name="restore-job-id"]');
+            const jobId = jobMeta ? jobMeta.getAttribute('content') : null;
+
+            document.documentElement.replaceWith(doc.documentElement);
+
+            if (jobId) {
+              startLogPolling(jobId);
+            }
+          } catch (e) {
+            alert("Error starting restore: " + e);
+          }
+
+          return false;
+        }
+
+        let logPollInterval = null;
+
+        function startLogPolling(jobId) {
+          if (!jobId) return;
+          if (logPollInterval) {
+            clearInterval(logPollInterval);
+          }
 
           const statusEl = document.getElementById("restore-status");
           const logEl = document.getElementById("restore-log");
@@ -598,14 +710,62 @@ def snapshot_detail(snapshot_id):
           }
           if (logEl) {
             logEl.classList.remove('hidden');
-            logEl.textContent = 'Running restic restore... logs will appear here when the operation finishes.';
           }
 
-          return confirm(`Restore ${checked.length} item(s) to "${path}"?`);
+          async function pollOnce() {
+            try {
+              const url = '{{ url_for("restore_logs_api", job_id="__JOB_ID__") }}'.replace('__JOB_ID__', encodeURIComponent(jobId));
+              const response = await fetch(url);
+              if (!response.ok) {
+                return;
+              }
+              const data = await response.json();
+              if (logEl) {
+                logEl.textContent = data.logs || '';
+                logEl.scrollTop = logEl.scrollHeight;
+              }
+              if (statusEl) {
+                if (data.status === 'success') {
+                  statusEl.innerHTML =
+                    '<div class="terminal-alert terminal-alert-primary terminal-alert-success">Restore completed</div>';
+                } else if (data.status === 'error') {
+                  statusEl.innerHTML =
+                    '<div class="terminal-alert terminal-alert-error">Restore failed</div>';
+                } else if (data.status === 'running' || data.status === 'pending') {
+                  statusEl.innerHTML =
+                    '<div class="terminal-alert terminal-alert-primary">Restore in progress</div>';
+                }
+              }
+              if (data.status === 'success' || data.status === 'error') {
+                clearInterval(logPollInterval);
+                logPollInterval = null;
+              }
+            } catch (e) {
+              // ignore transient errors
+            }
+          }
+
+          pollOnce();
+          logPollInterval = setInterval(pollOnce, 2000);
         }
 
-        document.addEventListener('DOMContentLoaded', loadRoot);
+        document.addEventListener('DOMContentLoaded', () => {
+          loadRoot();
+
+          // If the server rendered a job_id (e.g. after POST), start polling
+          const jobMeta = document.querySelector('meta[name="restore-job-id"]');
+          if (jobMeta) {
+            const jobId = jobMeta.getAttribute('content');
+            if (jobId) {
+              startLogPolling(jobId);
+            }
+          }
+        });
       </script>
+
+      {% if job_id %}
+      <meta name="restore-job-id" content="{{ job_id }}">
+      {% endif %}
     </body>
     </html>
     """
@@ -614,6 +774,7 @@ def snapshot_detail(snapshot_id):
         snapshot_id=snapshot_id,
         restore_status=restore_status,
         restore_logs=restore_logs,
+        job_id=job_id,
     )
 
 
