@@ -1,3 +1,4 @@
+import time
 from flask import Flask, render_template_string
 
 from restic import ResticUI
@@ -6,7 +7,12 @@ app = Flask(__name__)
 
 @app.route("/")
 def default_route():
-    snapshots = ResticUI().get_snapshots()
+    restic = ResticUI()
+    # Cache snapshots in memory for 10 seconds to reduce CLI calls
+    if not hasattr(restic, "_cached_snapshots") or (restic._cache_time + 10) < time.time():
+        restic._cached_snapshots = restic.get_snapshots()
+        restic._cache_time = time.time()
+    snapshots = restic._cached_snapshots
     template = """
     <h1>Restic Snapshots</h1>
     {% if snapshots %}
