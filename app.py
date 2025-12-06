@@ -196,7 +196,7 @@ def _run_restore(snapshot_id, restore_path, selected_paths):
     - For a small number of paths, use multiple --include flags.
     - For many paths, write them to a temporary file and use --files-from.
 
-    Returns a tuple: (combined_logs, success_bool)
+    Returns combined logs as a string.
     """
     # Basic sanity checks; you can tighten these as needed
     restore_path = restore_path.strip()
@@ -332,7 +332,7 @@ def snapshot_tree_node_api(snapshot_id):
     return jsonify({"entries": children})
 
 
-@app.route("/snapshot/<snapshot_id>, methods=["GET", "POST"])
+@app.route("/snapshot/<snapshot_id>", methods=["GET", "POST"])
 def snapshot_detail(snapshot_id):
     restore_status = None
     restore_logs = ""
