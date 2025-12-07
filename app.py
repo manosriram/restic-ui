@@ -89,6 +89,8 @@ def default_route():
       <meta charset="utf-8">
       <title>Restic Snapshots</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+      <link rel="shortcut icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
       <link rel="stylesheet" href="https://unpkg.com/terminal.css@0.7.4/dist/terminal.min.css" />
       <style>
         /* Make the main container wider than the default Terminal CSS width */
@@ -420,6 +422,8 @@ def snapshot_detail(snapshot_id):
       <meta charset="utf-8">
       <title>Snapshot {{ snapshot_id }}</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
+      <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
+      <link rel="shortcut icon" type="image/x-icon" href="{{ url_for('static', filename='favicon.ico') }}">
       <link rel="stylesheet" href="https://unpkg.com/terminal.css@0.7.4/dist/terminal.min.css" />
       <style>
         .wide-container {
