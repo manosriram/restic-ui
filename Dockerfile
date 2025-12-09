@@ -16,10 +16,10 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # Install uv (fast Python package/dependency manager)
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv Flask
 
 # Install dependencies using the lockfile (Flask etc.)
-RUN uv sync --frozen --no-dev
+# RUN uv sync --frozen --no-dev
 
 # Install gunicorn separately (not in uv.lock)
 RUN pip install --no-cache-dir gunicorn
