@@ -16,10 +16,13 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 
 # Install uv (fast Python package/dependency manager)
-RUN pip install --no-cache-dir uv Flask
+RUN pip install --no-cache-dir uv
 
-# Install dependencies using the lockfile
+# Install dependencies using the lockfile (Flask etc.)
 RUN uv sync --frozen --no-dev
+
+# Install gunicorn separately (not in uv.lock)
+RUN pip install --no-cache-dir gunicorn
 
 # Copy the rest of the application source
 COPY . .
@@ -32,5 +35,7 @@ ENV FLASK_APP=app.py
 # Expose the port the app listens on
 EXPOSE 8000
 
-# Default command: run the Flask app
-CMD ["python", "-m", "flask", "run", "--host=0.0.0.0", "--port=8000"]
+# Default command: run the app via gunicorn
+# -b 0.0.0.0:8000 binds to all interfaces on port 8000
+# "app:app" refers to the `app` object in app.py
+CMD ["gunicorn", "-b", "0.0.0.0:8000", "app:app"]
